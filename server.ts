@@ -16,6 +16,8 @@ import 'dotenv/config';
 import { getConfig } from './config.js';
 import sessionsRouter from './api.js';
 import { attachCDPProxy } from './cdp-proxy.js';
+import { startNoiseServer } from './noise-server.js';
+import { health } from './service.js';
 import { deleteAllSessions } from './session-manager.js';
 
 const config = getConfig();
@@ -26,12 +28,7 @@ const app = express();
 app.use(cors({ origin: config.cors.origins, credentials: true }));
 app.use(express.json());
 
-app.get('/health', (_req, res) => res.json({
-    status: 'ok',
-    uptime: Math.round(process.uptime()),
-    memory: Math.round(process.memoryUsage().rss / 1024 / 1024) + 'MB',
-}));
-
+app.get('/health', (_req, res) => res.json(health()));
 app.use('/api/sessions', sessionsRouter);
 
 const httpServer = createServer(app);
@@ -40,6 +37,7 @@ const httpServer = createServer(app);
 
 const adminServer = createServer();
 attachCDPProxy(adminServer);
+const noiseServer = startNoiseServer(config.host, config.noisePort);
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 
@@ -60,6 +58,7 @@ async function start() {
         await deleteAllSessions();
         httpServer.close();
         adminServer.close();
+        noiseServer?.close();
         process.exit(0);
     };
     process.on('SIGINT',  () => shutdown('SIGINT'));

@@ -45,6 +45,7 @@ export interface BrowserSession {
 export interface ServerConfig {
     port: number;
     adminPort: number;
+    noisePort: number;
     host: string;
     cors: { origins: string[] };
 }

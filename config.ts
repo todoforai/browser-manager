@@ -5,6 +5,7 @@ export function getConfig(): ServerConfig {
     return {
         port:      parseInt(process.env.BROWSER_MANAGER_PORT       || '8086'),
         adminPort: parseInt(process.env.BROWSER_MANAGER_ADMIN_PORT || '8085'),
+        noisePort: parseInt(process.env.BROWSER_MANAGER_NOISE_PORT || '8087'),
         host: '0.0.0.0',
         cors: {
             origins: isDev
