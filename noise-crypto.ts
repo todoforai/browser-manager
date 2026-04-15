@@ -4,7 +4,7 @@ import nacl from 'tweetnacl';
 const HASH_LEN = 32;
 const TAG_LEN = 16;
 const NONCE_LEN = 12;
-const PROTOCOL_NAME = Buffer.from('Noise_IK_25519_ChaChaPoly_BLAKE2s');
+const PROTOCOL_NAME = Buffer.from('Noise_NX_25519_ChaChaPoly_BLAKE2s');
 
 export interface KeyPair {
     secretKey: Buffer;
@@ -24,7 +24,7 @@ interface SymmetricState {
 
 export interface HandshakeState {
     symmetric: SymmetricState;
-    s: KeyPair;
+    s?: KeyPair;
     e: KeyPair | null;
     rs: Buffer;
     re: Buffer | null;
@@ -144,56 +144,44 @@ function split(state: SymmetricState): [CipherState, CipherState] {
     return [cipherState(k1), cipherState(k2)];
 }
 
-export function initiatorHandshake(localStatic: KeyPair, remoteStatic: Buffer): HandshakeState {
-    const symmetric = symmetricState();
-    mixHash(symmetric, remoteStatic);
-    return { symmetric, s: localStatic, e: null, rs: remoteStatic, re: null, messageIndex: 0, complete: false };
+export function initiatorHandshake(remoteStatic: Buffer): HandshakeState {
+    return { symmetric: symmetricState(), e: null, rs: remoteStatic, re: null, messageIndex: 0, complete: false };
 }
 
-export function responderHandshake(localStatic: KeyPair, remoteStatic: Buffer): HandshakeState {
-    const symmetric = symmetricState();
-    mixHash(symmetric, localStatic.publicKey);
-    return { symmetric, s: localStatic, e: null, rs: remoteStatic, re: null, messageIndex: 0, complete: false };
+export function responderHandshake(localStatic: KeyPair): HandshakeState {
+    return { symmetric: symmetricState(), s: localStatic, e: null, rs: Buffer.alloc(0), re: null, messageIndex: 0, complete: false };
 }
 
-export function writeMessage1(state: HandshakeState, payload = Buffer.alloc(0)): Buffer {
+export function writeMessage1(state: HandshakeState, _payload = Buffer.alloc(0)): Buffer {
     if (state.messageIndex !== 0) throw new Error('wrong message index');
     state.e = keypairFromSecret(Buffer.from(nacl.randomBytes(32)));
-    const parts = [state.e.publicKey];
     mixHash(state.symmetric, state.e.publicKey);
-    mixKey(state.symmetric, dh(state.e.secretKey, state.rs));
-    parts.push(encryptAndHash(state.symmetric, state.s.publicKey));
-    mixKey(state.symmetric, dh(state.s.secretKey, state.rs));
-    parts.push(encryptAndHash(state.symmetric, payload));
     state.messageIndex = 1;
-    return Buffer.concat(parts);
+    return Buffer.from(state.e.publicKey);
 }
 
 export function readMessage1(state: HandshakeState, msg: Buffer): Buffer {
     if (state.messageIndex !== 0) throw new Error('wrong message index');
-    if (msg.length < 32 + 48 + 16) throw new Error('truncated handshake message');
-    let offset = 0;
-    state.re = msg.subarray(offset, offset + 32);
-    offset += 32;
+    if (msg.length < 32) throw new Error('truncated handshake message');
+    state.re = msg.subarray(0, 32);
     mixHash(state.symmetric, state.re);
-    mixKey(state.symmetric, dh(state.s.secretKey, state.re));
-    const remoteStatic = decryptAndHash(state.symmetric, msg.subarray(offset, offset + 48));
-    offset += 48;
-    if (!remoteStatic.equals(state.rs)) throw new Error('remote static key mismatch');
-    mixKey(state.symmetric, dh(state.s.secretKey, state.rs));
-    const payload = decryptAndHash(state.symmetric, msg.subarray(offset));
     state.messageIndex = 1;
-    return payload;
+    return Buffer.alloc(0);
 }
 
 export function readMessage2(state: HandshakeState, msg: Buffer): Buffer {
     if (state.messageIndex !== 1 || !state.e) throw new Error('wrong message index');
-    if (msg.length < 32 + 16) throw new Error('truncated handshake message');
-    state.re = msg.subarray(0, 32);
+    if (msg.length < 32 + 48 + 16) throw new Error('truncated handshake message');
+    let offset = 0;
+    state.re = msg.subarray(offset, offset + 32);
     mixHash(state.symmetric, state.re);
+    offset += 32;
     mixKey(state.symmetric, dh(state.e.secretKey, state.re));
-    mixKey(state.symmetric, dh(state.s.secretKey, state.re));
-    const payload = decryptAndHash(state.symmetric, msg.subarray(32));
+    const remoteStatic = decryptAndHash(state.symmetric, msg.subarray(offset, offset + 48));
+    offset += 48;
+    if (!remoteStatic.equals(state.rs)) throw new Error('remote static key mismatch');
+    mixKey(state.symmetric, dh(state.e.secretKey, remoteStatic));
+    const payload = decryptAndHash(state.symmetric, msg.subarray(offset));
     state.messageIndex = 2;
     state.complete = true;
     return payload;
@@ -201,11 +189,13 @@ export function readMessage2(state: HandshakeState, msg: Buffer): Buffer {
 
 export function writeMessage2(state: HandshakeState, payload = Buffer.alloc(0)): Buffer {
     if (state.messageIndex !== 1 || !state.re) throw new Error('wrong message index');
+    if (!state.s) throw new Error('missing responder static key');
     const e = Buffer.from(nacl.randomBytes(32)) as Buffer;
     const ep = Buffer.from(nacl.scalarMult.base(e)) as Buffer;
     const parts = [ep];
     mixHash(state.symmetric, ep);
     mixKey(state.symmetric, dh(e, state.re));
+    parts.push(encryptAndHash(state.symmetric, state.s.publicKey));
     mixKey(state.symmetric, dh(state.s.secretKey, state.re));
     parts.push(encryptAndHash(state.symmetric, payload));
     state.messageIndex = 2;

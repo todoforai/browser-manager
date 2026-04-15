@@ -35,17 +35,15 @@ const MAX_FRAME = 1024 * 1024;
 
 export function startNoiseServer(host: string, port: number) {
     const localPrivate = process.env.NOISE_LOCAL_PRIVATE_KEY?.trim();
-    const remotePublic = process.env.NOISE_REMOTE_PUBLIC_KEY?.trim();
-    if (!localPrivate || !remotePublic) {
-        console.warn('[browser-manager] Noise disabled: missing NOISE_LOCAL_PRIVATE_KEY or NOISE_REMOTE_PUBLIC_KEY');
+    if (!localPrivate) {
+        console.warn('[browser-manager] Noise disabled: missing NOISE_LOCAL_PRIVATE_KEY');
         return null;
     }
 
     const serverStatic = keypairFromSecret(hexToBytes(localPrivate));
-    const clientPublic = hexToBytes(remotePublic);
 
     const server = net.createServer(socket => {
-        handleConnection(socket, serverStatic, clientPublic).catch(err => {
+        handleConnection(socket, serverStatic).catch(err => {
             console.warn('[browser-manager] noise connection failed:', err instanceof Error ? err.message : err);
             socket.destroy();
         });
@@ -55,8 +53,8 @@ export function startNoiseServer(host: string, port: number) {
     return server;
 }
 
-async function handleConnection(socket: net.Socket, serverStatic: ReturnType<typeof keypairFromSecret>, clientPublic: Buffer) {
-    const handshake = responderHandshake(serverStatic, clientPublic);
+async function handleConnection(socket: net.Socket, serverStatic: ReturnType<typeof keypairFromSecret>) {
+    const handshake = responderHandshake(serverStatic);
     readMessage1(handshake, await readFrame(socket));
     socket.write(writeFrame(writeMessage2(handshake)));
     const transport = toTransport(handshake);

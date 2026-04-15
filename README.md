@@ -11,7 +11,7 @@ browser-manager/
 ├── session-manager.ts — session CRUD (create/get/list/delete), idle checker
 ├── service.ts         — shared business logic for REST + Noise
 ├── noise-protocol.ts  — Noise request/response types + payload guards
-├── noise-crypto.ts    — minimal Noise IK + transport crypto helpers
+├── noise-crypto.ts    — minimal Noise NX + transport crypto helpers
 ├── noise-server.ts    — TCP Noise RPC server
 ├── cdp-proxy.ts       — WebSocket relay: /cdp/:sessionId ↔ Chrome CDP WS
 ├── api.ts             — Express REST routes for session CRUD
@@ -44,6 +44,8 @@ WS     /cdp/:sessionId            raw CDP WebSocket proxy (admin port)
 
 ## Noise RPC
 
+The CLI talks to `browser-manager` over `Noise_NX_25519_ChaChaPoly_BLAKE2s` TCP.
+
 Request envelope:
 
 ```json
@@ -62,7 +64,7 @@ Supported request types:
 - `browser.restore`
 - `browser.hibernated.list`
 
-Noise auth is optional in MVP. Set `BROWSER_MANAGER_API_KEY` to require `token` on REST-backed business operations.
+Noise transport authenticates the server. Set `BROWSER_MANAGER_API_KEY` to require `token` on business operations.
 
 ## CLI
 
@@ -78,7 +80,6 @@ make linux
 CLI env:
 
 - `NOISE_ADDR` default: `127.0.0.1:8087`
-- `NOISE_LOCAL_PRIVATE_KEY` required
 - `NOISE_REMOTE_PUBLIC_KEY` required
 - `--token <api-key>` optional, used when `BROWSER_MANAGER_API_KEY` is set
 
