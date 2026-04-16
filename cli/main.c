@@ -316,7 +316,7 @@ static void cmd_login(int argc, char **argv) {
 
     const char *addr = getenv("NOISE_BACKEND_ADDR");
     const char *pub  = getenv("NOISE_BACKEND_PUBLIC_KEY");
-    if (!addr) addr = "api.todofor.ai:4001";
+    if (!addr) addr = "api.todofor.ai:4100";
     if (!pub) { fprintf(stderr, "error: NOISE_BACKEND_PUBLIC_KEY not set\n"); exit(1); }
 
     if (login_device_flow(addr, pub, "browser") != 0) exit(1);
