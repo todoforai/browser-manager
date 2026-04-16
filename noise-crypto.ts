@@ -205,8 +205,10 @@ export function writeMessage2(state: HandshakeState, payload = Buffer.alloc(0)):
 
 export function toTransport(state: HandshakeState): TransportState {
     if (!state.complete) throw new Error('handshake not complete');
-    const [responderSend, responderRecv] = split(state.symmetric);
-    return { send: responderSend, recv: responderRecv };
+    // split() returns [initiator→responder, responder→initiator] per Noise spec.
+    // Responder sends with k2 and receives with k1.
+    const [initToResp, respToInit] = split(state.symmetric);
+    return { send: respToInit, recv: initToResp };
 }
 
 export function transportRead(state: TransportState, ciphertext: Buffer): Buffer {

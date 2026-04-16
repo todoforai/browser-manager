@@ -3,12 +3,17 @@
 /// Config (env):
 ///   NOISE_ADDR              host:port of browser-manager Noise server (default: 127.0.0.1:8087)
 ///   NOISE_REMOTE_PUBLIC_KEY 32-byte hex — browser-manager public key
+///
+/// Or run `browser login` to authenticate via browser and save credentials.
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "noise.h"
 #include "args.h"
+
+#define LOGIN_IMPLEMENTATION
+#include "login.h"
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -199,12 +204,22 @@ static void run_cmd(const char *json_request, size_t req_len) {
     sock_init();
 
     const char *pub_hex = getenv("NOISE_REMOTE_PUBLIC_KEY");
-    if (!pub_hex) fatal("NOISE_REMOTE_PUBLIC_KEY not set");
+    const char *addr_str = getenv("NOISE_ADDR");
+
+    // Fall back to saved credentials from `browser login`
+    login_credentials_t saved_creds;
+    if ((!pub_hex || !addr_str) && login_load_credentials(&saved_creds) == 0) {
+        if (!pub_hex && saved_creds.browser_manager_noise_public_key[0])
+            pub_hex = saved_creds.browser_manager_noise_public_key;
+        if (!addr_str && saved_creds.browser_manager_noise_addr[0])
+            addr_str = saved_creds.browser_manager_noise_addr;
+    }
+
+    if (!pub_hex) fatal("NOISE_REMOTE_PUBLIC_KEY not set (run `browser login` or set env)");
 
     uint8_t remote_pub[32];
     if (hex_decode(remote_pub, 32, pub_hex) < 0) fatal("NOISE_REMOTE_PUBLIC_KEY: invalid hex");
 
-    const char *addr_str = getenv("NOISE_ADDR");
     if (!addr_str) addr_str = "127.0.0.1:8087";
     char host[256], port_str[16];
     const char *colon = strrchr(addr_str, ':');
@@ -262,6 +277,11 @@ static void run_cmd(const char *json_request, size_t req_len) {
 }
 
 static void build_and_run(const char *type, const char *payload_json, const char *token) {
+    // Fall back to saved API key from `browser login`
+    login_credentials_t saved_creds;
+    if (!token && login_load_credentials(&saved_creds) == 0 && saved_creds.api_key[0])
+        token = saved_creds.api_key;
+
     uint8_t id_bytes[4];
     if (noise_random(id_bytes, 4) < 0) fatal("RNG failed");
     char id_hex[9];
@@ -285,11 +305,29 @@ static void build_and_run(const char *type, const char *payload_json, const char
     run_cmd(req, jb.len);
 }
 
+static void cmd_login(int argc, char **argv) {
+    ketopt_t opt = KETOPT_INIT;
+    ko_longopt_t longopts[] = {{ "help", ko_no_argument, 'h' }, { 0, 0, 0 }};
+    int c;
+    while ((c = ketopt(&opt, argc, argv, 1, "h", longopts)) >= 0) {
+        if (c == 'h') { cli_usage(stdout, "browser", "login"); exit(0); }
+        cli_parse_error("browser", "login", argc, argv, &opt, c);
+    }
+
+    const char *addr = getenv("NOISE_BACKEND_ADDR");
+    const char *pub  = getenv("NOISE_BACKEND_PUBLIC_KEY");
+    if (!addr) addr = "api.todofor.ai:4001";
+    if (!pub) { fprintf(stderr, "error: NOISE_BACKEND_PUBLIC_KEY not set\n"); exit(1); }
+
+    if (login_device_flow(addr, pub, "browser") != 0) exit(1);
+}
+
 static void usage(void) {
     fprintf(stdout,
         "Usage: browser <command> [options]\n"
         "\n"
         "Commands:\n"
+        "  login\n"
         "  health\n"
         "  create --user <id> [--width <px> --height <px>] [--token <api-key>]\n"
         "  list [--user <id>] [--token <api-key>]\n"
@@ -489,7 +527,9 @@ int main(int argc, char **argv) {
         return 0;
     }
 
-    if (!strcmp(argv[1], "health")) {
+    if (!strcmp(argv[1], "login")) {
+        cmd_login(argc - 1, argv + 1);
+    } else if (!strcmp(argv[1], "health")) {
         cmd_health(argc - 1, argv + 1);
     } else if (!strcmp(argv[1], "create")) {
         cmd_create(argc - 1, argv + 1);
