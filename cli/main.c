@@ -319,7 +319,7 @@ static void cmd_login(int argc, char **argv) {
     if (!addr) addr = "api.todofor.ai:4100";
     if (!pub)  pub  = "88e38a377ee697b448ec2779b625049110e05f77587a135df45994062b6bb76a";
 
-    if (login_device_flow(addr, pub, "browser") != 0) exit(1);
+    if (login_device_flow(addr, pub, "browser", NULL) != 0) exit(1);
 }
 
 static void usage(void) {
