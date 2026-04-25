@@ -44,7 +44,7 @@ WS     /cdp/:sessionId            raw CDP WebSocket proxy (admin port)
 
 ## Noise RPC
 
-The CLI talks to `browser-manager` over `Noise_NX_25519_ChaChaPoly_BLAKE2s` TCP.
+The CLI talks to `browser-manager` over `Noise_NX_25519_ChaChaPoly_BLAKE2b` TCP.
 
 Request envelope:
 

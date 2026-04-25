@@ -9,7 +9,8 @@ import {
     type NoiseRequest,
     type NoiseResponse,
 } from './noise-protocol.js';
-import {
+import { nxResponder } from '@todoforai/noise';
+const {
     hexToBytes,
     keypairFromSecret,
     readMessage1,
@@ -18,7 +19,7 @@ import {
     transportRead,
     transportWrite,
     writeMessage2,
-} from './noise-crypto.js';
+} = nxResponder;
 import {
     createSession,
     deleteAllForUser,
