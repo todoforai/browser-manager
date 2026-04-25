@@ -317,12 +317,25 @@ static void cmd_login(int argc, char **argv) {
     if (login_device_flow(addr, pub, "browser", NULL) != 0) exit(1);
 }
 
+static void cmd_whoami(int argc, char **argv) {
+    ketopt_t opt = KETOPT_INIT;
+    ko_longopt_t longopts[] = {{ "help", ko_no_argument, 'h' }, { 0, 0, 0 }};
+    int c;
+    while ((c = ketopt(&opt, argc, argv, 1, "h", longopts)) >= 0) {
+        if (c == 'h') { cli_usage(stdout, "browser", "whoami"); exit(0); }
+        cli_parse_error("browser", "whoami", argc, argv, &opt, c);
+    }
+    if (login_print_whoami("browser") != 0) exit(1);
+}
+
 static void usage(void) {
     fprintf(stdout,
         "Usage: browser <command> [options]\n"
         "\n"
         "Commands:\n"
-        "  login\n"
+        "  login                       Interactive device login\n"
+        "  whoami                      Show the logged-in user\n"
+        "  version                     Show version\n"
         "  health\n"
         "  create --user <id> [--width <px> --height <px>] [--token <api-key>]\n"
         "  list [--user <id>] [--token <api-key>]\n"
@@ -334,7 +347,8 @@ static void usage(void) {
         "  hibernated-list [--user <id>] [--token <api-key>]\n"
         "\n"
         "Global options:\n"
-        "  -h, --help  Show help\n"
+        "  -h, --help     Show help\n"
+        "  -v, --version  Show version\n"
         "\n"
         "Env:\n"
         "  NOISE_ADDR              browser-manager Noise address (default: " DEFAULT_BROWSER_MANAGER_ADDR ")\n"
@@ -521,9 +535,15 @@ int main(int argc, char **argv) {
         usage();
         return 0;
     }
+    if (!strcmp(argv[1], "--version") || !strcmp(argv[1], "-v") || !strcmp(argv[1], "version")) {
+        printf("%s\n", BROWSER_VERSION);
+        return 0;
+    }
 
     if (!strcmp(argv[1], "login")) {
         cmd_login(argc - 1, argv + 1);
+    } else if (!strcmp(argv[1], "whoami")) {
+        cmd_whoami(argc - 1, argv + 1);
     } else if (!strcmp(argv[1], "health")) {
         cmd_health(argc - 1, argv + 1);
     } else if (!strcmp(argv[1], "create")) {
