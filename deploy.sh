@@ -14,7 +14,14 @@
 
 set -e
 
-source "$(dirname "$0")/../scripts/deploy-lib.sh"
+# Load shared deploy helpers from todoforai/packages.
+PACKAGES_DIR="${PACKAGES_DIR:-$HOME/.cache/todoforai-packages}"
+if [ -d "$PACKAGES_DIR/.git" ]; then
+    git -C "$PACKAGES_DIR" fetch -q origin main && git -C "$PACKAGES_DIR" reset -q --hard origin/main
+else
+    git clone --depth 1 -q git@github.com:todoforai/packages.git "$PACKAGES_DIR"
+fi
+source "$PACKAGES_DIR/shared-deploy/deploy-lib.sh"
 
 # Coexists with `browsing` on the same host (which owns browser.todofor.ai
 # + ports 8085/8086). browser-manager runs on bm.todofor.ai + 8090/8092.
