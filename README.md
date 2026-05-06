@@ -80,7 +80,7 @@ make linux
 CLI env:
 
 - `NOISE_ADDR` default: `127.0.0.1:8087`
-- `NOISE_REMOTE_PUBLIC_KEY` required
+- `NOISE_REMOTE_PUBKEY` required
 - `--token <api-key>` optional, used when `BROWSER_MANAGER_API_KEY` is set
 
 ## Dev

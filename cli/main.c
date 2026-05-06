@@ -2,7 +2,7 @@
 ///
 /// Config (env, optional overrides):
 ///   NOISE_ADDR              host:port of browser-manager Noise server (default: browser.todofor.ai:4120)
-///   NOISE_REMOTE_PUBLIC_KEY 32-byte hex — browser-manager public key
+///   NOISE_REMOTE_PUBKEY 32-byte hex — browser-manager public key
 ///
 /// Run `browser login` first to mint an API key (sent with every request).
 
@@ -15,7 +15,7 @@
 #define LOGIN_IMPLEMENTATION
 #include "login.h"
 
-// Hardcoded browser-manager coordinates. Override with NOISE_ADDR / NOISE_REMOTE_PUBLIC_KEY.
+// Hardcoded browser-manager coordinates. Override with NOISE_ADDR / NOISE_REMOTE_PUBKEY.
 // Keep in sync with the browser-manager's NOISE_LOCAL_PRIVATE_KEY on deploy.
 #define DEFAULT_BROWSER_MANAGER_ADDR "browser.todofor.ai:4120"
 #define DEFAULT_BROWSER_MANAGER_PUB  "0000000000000000000000000000000000000000000000000000000000000000"
@@ -208,13 +208,13 @@ static void print_response(const uint8_t *resp, size_t len) {
 static void run_cmd(const char *json_request, size_t req_len) {
     sock_init();
 
-    const char *pub_hex  = getenv("NOISE_REMOTE_PUBLIC_KEY");
+    const char *pub_hex  = getenv("NOISE_REMOTE_PUBKEY");
     const char *addr_str = getenv("NOISE_ADDR");
     if (!pub_hex)  pub_hex  = DEFAULT_BROWSER_MANAGER_PUB;
     if (!addr_str) addr_str = DEFAULT_BROWSER_MANAGER_ADDR;
 
     uint8_t remote_pub[32];
-    if (hex_decode(remote_pub, 32, pub_hex) < 0) fatal("NOISE_REMOTE_PUBLIC_KEY: invalid hex");
+    if (hex_decode(remote_pub, 32, pub_hex) < 0) fatal("NOISE_REMOTE_PUBKEY: invalid hex");
 
     char host[256], port_str[16];
     const char *colon = strrchr(addr_str, ':');
@@ -309,12 +309,17 @@ static void cmd_login(int argc, char **argv) {
         cli_parse_error("browser", "login", argc, argv, &opt, c);
     }
 
-    const char *addr = getenv("NOISE_BACKEND_ADDR");
-    const char *pub  = getenv("NOISE_BACKEND_PUBLIC_KEY");
-    if (!addr) addr = LOGIN_DEFAULT_BACKEND_HOST ":" LOGIN_DEFAULT_NOISE_PORT;
-    if (!pub)  pub  = "88e38a377ee697b448ec2779b625049110e05f77587a135df45994062b6bb76a";
+    // Compose addr from NOISE_BACKEND_HOST / _PORT (or fall back to defaults).
+    const char *bh = getenv("NOISE_BACKEND_HOST");
+    const char *bp = getenv("NOISE_BACKEND_PORT");
+    char addr_buf[280];
+    snprintf(addr_buf, sizeof(addr_buf), "%s:%s",
+             bh ? bh : LOGIN_DEFAULT_BACKEND_HOST,
+             bp ? bp : LOGIN_DEFAULT_NOISE_PORT);
+    const char *pub = getenv("NOISE_BACKEND_PUBKEY");
+    if (!pub) pub = LOGIN_DEFAULT_BACKEND_PUBKEY;
 
-    if (login_device_flow(addr, pub, "browser", NULL) != 0) exit(1);
+    if (login_device_flow(addr_buf, pub, "browser", NULL) != 0) exit(1);
 }
 
 static void cmd_whoami(int argc, char **argv) {
@@ -352,7 +357,7 @@ static void usage(void) {
         "\n"
         "Env:\n"
         "  NOISE_ADDR              browser-manager Noise address (default: " DEFAULT_BROWSER_MANAGER_ADDR ")\n"
-        "  NOISE_REMOTE_PUBLIC_KEY 32-byte hex server public key\n");
+        "  NOISE_REMOTE_PUBKEY 32-byte hex server public key\n");
 }
 
 static void usage_health(void) { cli_usage(stdout, "browser", "health"); }
