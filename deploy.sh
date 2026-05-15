@@ -42,6 +42,11 @@ deploy() {
         echo "Creating release $RELEASE..."
         git clone --depth 1 --branch $BRANCH $REPO $DEPLOY_PATH/releases/$RELEASE
 
+        $(declare -f sync_repo)
+
+        echo "Setting up noise-ts (sibling of release; resolves file:../noise-ts)..."
+        sync_repo $DEPLOY_PATH/releases/noise-ts git@github.com:todoforai/noise-ts.git main
+
         echo "Installing dependencies..."
         cd $DEPLOY_PATH/releases/$RELEASE
         ~/.bun/bin/bun install
