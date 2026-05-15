@@ -97,7 +97,7 @@ cd cli && make linux
 
 CLI env (rarely needed):
 
-- `BROWSER_NOISE_HOST` — browser-manager host (default: `browser.todofor.ai`)
+- `BROWSER_NOISE_HOST` — browser-manager host (default: `bm.todofor.ai`)
 - `BROWSER_NOISE_PORT` — browser-manager port (default: `4120` prod / `8087` dev)
 
 ## Dev

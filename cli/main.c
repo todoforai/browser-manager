@@ -6,7 +6,7 @@
 /// login and pinned thereafter — same model as the bridge daemon.
 ///
 /// Env overrides (rarely needed):
-///   BROWSER_NOISE_HOST   browser-manager host (default: browser.todofor.ai)
+///   BROWSER_NOISE_HOST   browser-manager host (default: bm.todofor.ai)
 ///   BROWSER_NOISE_PORT   browser-manager port (default: 4120 prod, 8087 dev)
 
 #include <stdio.h>
@@ -18,7 +18,7 @@
 #define LOGIN_IMPLEMENTATION
 #include "login.h"
 
-#define DEFAULT_BROWSER_HOST     "browser.todofor.ai"
+#define DEFAULT_BROWSER_HOST     "bm.todofor.ai"
 #define DEFAULT_BROWSER_PORT     "4120"
 #define DEV_BROWSER_PORT         "8087"
 
