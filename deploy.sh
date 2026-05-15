@@ -46,6 +46,9 @@ deploy() {
 
         echo "Setting up noise-ts (sibling of release; resolves file:../noise-ts)..."
         sync_repo $DEPLOY_PATH/releases/noise-ts git@github.com:todoforai/noise-ts.git main
+        cd $DEPLOY_PATH/releases/noise-ts
+        ~/.bun/bin/bun install
+        ~/.bun/bin/bun run build
 
         echo "Installing dependencies..."
         cd $DEPLOY_PATH/releases/$RELEASE
