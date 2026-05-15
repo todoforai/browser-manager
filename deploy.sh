@@ -54,6 +54,9 @@ deploy() {
         cd $DEPLOY_PATH/releases/$RELEASE
         ~/.bun/bin/bun install
 
+        echo "Installing Playwright Chromium system dependencies..."
+        ~/.bun/bin/bun node_modules/playwright/cli.js install-deps chromium
+
         echo "Installing Playwright Chromium..."
         ~/.bun/bin/bun node_modules/playwright/cli.js install chromium
 
@@ -234,6 +237,10 @@ setup() {
             echo "Installing Bun..."
             curl -fsSL https://bun.sh/install | bash
         fi
+
+        # Chromium system deps (libnspr4, libnss3, fonts, …) are installed by
+        # `playwright install-deps chromium` during deploy(), using the version
+        # pinned in package-lock.json — keeps the dep set tracking Playwright.
 
         if [ ! -f $SHARED/.env ]; then
             cat > $SHARED/.env << 'ENVEOF'
