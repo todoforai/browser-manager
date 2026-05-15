@@ -5,6 +5,8 @@ export interface NoiseRequest {
     type: string;
     payload?: unknown;
     token?: string;
+    // Admin override — only honored when token === BROWSER_MANAGER_ADMIN_KEY.
+    act_as?: string;
 }
 
 export interface NoiseError {

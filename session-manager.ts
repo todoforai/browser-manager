@@ -22,6 +22,7 @@ const IDLE_TIMEOUT_MS      = 5  * 60 * 1000;  // active → idle after 5 min wit
 const HIBERNATE_TIMEOUT_MS = 30 * 60 * 1000;  // idle → hibernated after 30 min
 const IDLE_CHECK_MS        = 60 * 1000;
 const HIBERNATE_DIR        = process.env.HIBERNATE_DIR ?? './hibernate-data';
+const hibernatePath = (id: string) => path.join(HIBERNATE_DIR, `${id}.json`);
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
@@ -115,16 +116,25 @@ export function sessionIdsForUser(userId: string): string[] {
 }
 
 export async function deleteSession(sessionId: string): Promise<void> {
+    // Delete from both active and hibernated state — callers shouldn't care which.
     const s = sessions.get(sessionId);
-    if (!s) return;
-    sessions.delete(sessionId);
-    await s.browser.close().catch(() => {});
+    if (s) {
+        sessions.delete(sessionId);
+        await s.browser.close().catch(() => {});
+    }
+    hibernated.delete(sessionId);
+    await fs.unlink(hibernatePath(sessionId)).catch(() => {});
 }
 
 export async function deleteAllForUser(userId: string): Promise<number> {
-    const ids = sessionIdsForUser(userId);
-    await Promise.all(ids.map(deleteSession));
-    return ids.length;
+    // Hydrate hibernated index from disk so we catch post-restart entries.
+    await listHibernated();
+    const ids = new Set([
+        ...sessionIdsForUser(userId),
+        ...[...hibernated.entries()].filter(([, d]) => d.userId === userId).map(([id]) => id),
+    ]);
+    await Promise.all([...ids].map(deleteSession));
+    return ids.size;
 }
 
 export async function deleteAllSessions(): Promise<void> {
@@ -133,9 +143,15 @@ export async function deleteAllSessions(): Promise<void> {
 
 // ── Hibernate / Restore ───────────────────────────────────────────────────────
 
-export async function hibernateSession(sessionId: string): Promise<boolean> {
+export type HibernateResult = 'ok' | 'not_found' | 'in_use';
+
+export async function hibernateSession(sessionId: string): Promise<HibernateResult> {
     const s = sessions.get(sessionId);
-    if (!s) return false;
+    if (!s) return 'not_found';
+    if (s.connections > 0) {
+        console.log(`[browser-manager] hibernate ${sessionId} refused — ${s.connections} active connection(s)`);
+        return 'in_use';
+    }
 
     const pages = s.browser.contexts()[0]?.pages() ?? [];
     const page  = pages.find(p => !p.url().startsWith('about:')) ?? pages[0];
@@ -153,54 +169,66 @@ export async function hibernateSession(sessionId: string): Promise<boolean> {
 
     hibernated.set(sessionId, data);
     await fs.mkdir(HIBERNATE_DIR, { recursive: true });
-    await fs.writeFile(path.join(HIBERNATE_DIR, `${sessionId}.json`), JSON.stringify(data));
+    await fs.writeFile(hibernatePath(sessionId), JSON.stringify(data));
 
     console.log(`[browser-manager] ${sessionId} → hibernated (url: ${url})`);
-    return true;
+    return 'ok';
 }
 
-export async function restoreSession(sessionId: string): Promise<SessionInfo | null> {
-    let data = hibernated.get(sessionId);
-    if (!data) {
-        // Try loading from disk (e.g. after process restart)
-        try {
-            data = JSON.parse(await fs.readFile(path.join(HIBERNATE_DIR, `${sessionId}.json`), 'utf-8'));
-        } catch { return null; }
-    }
+const inflightRestores = new Map<string, Promise<SessionInfo | null>>();
 
-    const info = await createSession(sessionId, { userId: data!.userId, viewport: data!.viewport });
+export function restoreSession(sessionId: string): Promise<SessionInfo | null> {
+    // Coalesce concurrent restores first — `sessions.has()` flips to true mid-restore
+    // (after createSession's set), so checking in-flight first ensures all callers
+    // wait until the post-launch navigation step has finished.
+    const existing = inflightRestores.get(sessionId);
+    if (existing) return existing;
+    // Already active → return current info (idempotent, also unifies API + auto-restore paths)
+    if (sessions.has(sessionId)) return getSession(sessionId);
+    const p = restoreSessionInner(sessionId).finally(() => inflightRestores.delete(sessionId));
+    inflightRestores.set(sessionId, p);
+    return p;
+}
+
+async function restoreSessionInner(sessionId: string): Promise<SessionInfo | null> {
+    const data = await getHibernated(sessionId);
+    if (!data) return null;
+
+    const info = await createSession(sessionId, { userId: data.userId, viewport: data.viewport });
 
     // Navigate to saved URL
-    if (data!.url && data!.url !== 'about:blank') {
+    if (data.url && data.url !== 'about:blank') {
         const s = sessions.get(sessionId);
         const page = s?.browser.contexts()[0]?.pages()[0];
-        await page?.goto(data!.url, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+        await page?.goto(data.url, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
     }
 
     hibernated.delete(sessionId);
-    await fs.unlink(path.join(HIBERNATE_DIR, `${sessionId}.json`)).catch(() => {});
+    await fs.unlink(hibernatePath(sessionId)).catch(() => {});
 
     console.log(`[browser-manager] ${sessionId} → restored`);
     return info;
 }
 
-export function getHibernated(sessionId: string): HibernatedSession | undefined {
-    return hibernated.get(sessionId);
+/**
+ * Look up a hibernated session by id. Memory first, then disk so process
+ * restarts and not-yet-listed entries are visible. Hydrates the index on hit.
+ */
+export async function getHibernated(sessionId: string): Promise<HibernatedSession | undefined> {
+    const mem = hibernated.get(sessionId);
+    if (mem) return mem;
+    try {
+        const data: HibernatedSession = JSON.parse(await fs.readFile(hibernatePath(sessionId), 'utf-8'));
+        hibernated.set(sessionId, data);
+        return data;
+    } catch { return undefined; }
 }
 
 export async function listHibernated(userId?: string): Promise<HibernatedSession[]> {
-    // Merge in-memory + disk (handles process restarts)
+    // Merge in-memory + disk (handles process restarts).
     try {
         const files = await fs.readdir(HIBERNATE_DIR);
-        for (const f of files.filter(f => f.endsWith('.json'))) {
-            const id = f.replace('.json', '');
-            if (!hibernated.has(id)) {
-                try {
-                    const d: HibernatedSession = JSON.parse(await fs.readFile(path.join(HIBERNATE_DIR, f), 'utf-8'));
-                    hibernated.set(id, d);
-                } catch {}
-            }
-        }
+        await Promise.all(files.filter(f => f.endsWith('.json')).map(f => getHibernated(f.replace('.json', ''))));
     } catch {}
     return [...hibernated.values()].filter(d => !userId || d.userId === userId);
 }

@@ -232,7 +232,7 @@ setup() {
 NODE_ENV=production
 HEADLESS=true
 HIBERNATE_DIR=/var/lib/browser-manager/hibernate
-BROWSER_MANAGER_API_KEY=CHANGE_ME
+BROWSER_MANAGER_ADMIN_KEY=CHANGE_ME
 ENVEOF
             echo "Created default .env — edit $SHARED/.env"
         fi
