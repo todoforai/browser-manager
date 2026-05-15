@@ -23,12 +23,7 @@ export interface IdPayload {
     id: string;
 }
 
-export interface UserPayload {
-    user_id?: string;
-}
-
-export interface CreateBrowserPayload extends UserPayload {
-    user_id: string;
+export interface CreateBrowserPayload {
     viewport?: Viewport;
 }
 
@@ -61,13 +56,7 @@ export function isIdPayload(value: unknown): value is IdPayload {
     return isObject(value) && typeof value.id === 'string' && value.id.length > 0;
 }
 
-export function isUserPayload(value: unknown): value is UserPayload {
-    return isObject(value) && (value.user_id === undefined || typeof value.user_id === 'string');
-}
-
 export function isCreateBrowserPayload(value: unknown): value is CreateBrowserPayload {
     return isObject(value)
-        && typeof value.user_id === 'string'
-        && value.user_id.length > 0
         && (value.viewport === undefined || isViewport(value.viewport));
 }

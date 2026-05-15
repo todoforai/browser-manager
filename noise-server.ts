@@ -3,7 +3,6 @@ import {
     err,
     isCreateBrowserPayload,
     isIdPayload,
-    isUserPayload,
     ok,
     parsePayload,
     type NoiseRequest,
@@ -22,7 +21,7 @@ const {
 } = nxResponder;
 import {
     createSession,
-    deleteAllForUser,
+    deleteAllForCaller,
     deleteSession,
     getSession,
     health,
@@ -76,10 +75,8 @@ async function dispatch(req: NoiseRequest): Promise<NoiseResponse> {
                 return ok(req.id, health());
             case 'browser.create':
                 return ok(req.id, await createSession(parsePayload(req.payload ?? {}, isCreateBrowserPayload), req.token));
-            case 'browser.list': {
-                const payload = parsePayload(req.payload ?? {}, isUserPayload);
-                return ok(req.id, await listSessions(payload.user_id, req.token));
-            }
+            case 'browser.list':
+                return ok(req.id, await listSessions(req.token));
             case 'browser.get': {
                 const payload = parsePayload(req.payload ?? {}, isIdPayload);
                 const result = await getSession(payload.id, req.token);
@@ -90,25 +87,22 @@ async function dispatch(req: NoiseRequest): Promise<NoiseResponse> {
                 await deleteSession(payload.id, req.token);
                 return ok(req.id, { success: true });
             }
-            case 'browser.delete_all': {
-                const payload = parsePayload(req.payload ?? {}, isUserPayload);
-                if (!payload.user_id) return err(req.id, 'bad_request', 'user_id required');
-                return ok(req.id, { deleted: await deleteAllForUser(payload.user_id, req.token) });
-            }
+            case 'browser.delete_all':
+                return ok(req.id, { deleted: await deleteAllForCaller(req.token) });
             case 'browser.hibernate': {
                 const payload = parsePayload(req.payload ?? {}, isIdPayload);
                 const result = await hibernateSession(payload.id, req.token);
-                return result ? ok(req.id, { success: true }) : err(req.id, 'not_found', 'Session not found');
+                if (result === 'ok')     return ok(req.id, { success: true });
+                if (result === 'in_use') return err(req.id, 'in_use', 'Session has active connections');
+                return err(req.id, 'not_found', 'Session not found');
             }
             case 'browser.restore': {
                 const payload = parsePayload(req.payload ?? {}, isIdPayload);
                 const result = await restoreSession(payload.id, req.token);
                 return result ? ok(req.id, result) : err(req.id, 'not_found', 'No hibernated session found');
             }
-            case 'browser.hibernated.list': {
-                const payload = parsePayload(req.payload ?? {}, isUserPayload);
-                return ok(req.id, await listHibernated(payload.user_id, req.token));
-            }
+            case 'browser.hibernated.list':
+                return ok(req.id, await listHibernated(req.token));
             default:
                 return err(req.id, 'bad_request', `Unknown request type: ${req.type}`);
         }

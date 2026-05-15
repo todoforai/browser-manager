@@ -1,28 +1,26 @@
 /**
  * api.ts
- * 
+ *
  * REST routes for browser session management.
- * Mounted on the public HTTP server.
- * 
+ * Mounted on the public HTTP server. The caller's identity (used to scope
+ * list/delete-all) is derived from the auth token by service.requireAuth.
+ *
  * POST   /api/sessions              create session
- * GET    /api/sessions              list sessions (optional ?userId=)
+ * GET    /api/sessions              list caller's sessions
  * GET    /api/sessions/:sessionId   get session
  * DELETE /api/sessions/:sessionId   delete session
- * DELETE /api/sessions?userId=      delete all sessions for user
+ * DELETE /api/sessions              delete all caller's sessions
  */
 
 import { Router, Request, Response } from 'express';
 import {
     createSession, getSession, listSessions,
-    deleteSession, deleteAllForUser,
+    deleteSession, deleteAllForCaller,
     hibernateSession, restoreSession, listHibernated,
     requestToken,
 } from './service.js';
 
 const router = Router();
-
-const qs = (v: unknown): string | undefined =>
-    typeof v === 'string' ? v : Array.isArray(v) ? String(v[0]) : undefined;
 
 const token = (req: Request) => requestToken({
     authorization: req.header('authorization') ?? undefined,
@@ -40,19 +38,18 @@ const wrap = (fn: (req: Request, res: Response) => Promise<unknown>) =>
     };
 
 router.post('/', wrap(async (req, res) => {
-    const user_id  = typeof req.body.userId === 'string' ? req.body.userId : 'anonymous';
     const vp       = req.body.viewport;
     const viewport = (vp && typeof vp.width === 'number' && typeof vp.height === 'number'
         && vp.width > 0 && vp.height > 0) ? { width: vp.width, height: vp.height } : undefined;
-    res.json(await createSession({ user_id, viewport }, token(req)));
+    res.json(await createSession({ viewport }, token(req)));
 }));
 
 router.get('/hibernated', wrap(async (req, res) => {
-    res.json(await listHibernated(qs(req.query.userId), token(req)));
+    res.json(await listHibernated(token(req)));
 }));
 
 router.get('/', wrap(async (req, res) => {
-    res.json(await listSessions(qs(req.query.userId), token(req)));
+    res.json(await listSessions(token(req)));
 }));
 
 router.get('/:sessionId', wrap(async (req, res) => {
@@ -62,9 +59,7 @@ router.get('/:sessionId', wrap(async (req, res) => {
 }));
 
 router.delete('/', wrap(async (req, res) => {
-    const userId = qs(req.query.userId);
-    if (!userId) return res.status(400).json({ error: 'userId required' });
-    res.json({ deleted: await deleteAllForUser(userId, token(req)) });
+    res.json({ deleted: await deleteAllForCaller(token(req)) });
 }));
 
 router.delete('/:sessionId', wrap(async (req, res) => {
@@ -74,8 +69,9 @@ router.delete('/:sessionId', wrap(async (req, res) => {
 
 // POST /api/sessions/:sessionId/hibernate
 router.post('/:sessionId/hibernate', wrap(async (req, res) => {
-    const ok = await hibernateSession(String(req.params.sessionId), token(req));
-    if (!ok) return res.status(404).json({ error: 'Session not found' });
+    const result = await hibernateSession(String(req.params.sessionId), token(req));
+    if (result === 'not_found') return res.status(404).json({ error: 'Session not found' });
+    if (result === 'in_use')    return res.status(409).json({ error: 'Session has active connections' });
     res.json({ success: true });
 }));
 

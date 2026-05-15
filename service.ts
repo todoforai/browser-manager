@@ -12,7 +12,6 @@ import {
 import type { HibernatedSession, SessionInfo, Viewport } from './types.js';
 
 export interface CreateSessionInput {
-    user_id: string;
     viewport?: Viewport;
 }
 
@@ -23,9 +22,14 @@ export function requestToken(headers?: { authorization?: string | undefined; 'x-
     return bearer ?? headers?.['x-api-key'];
 }
 
-export function requireAuth(token?: string): void {
-    if (!configuredApiKey) return;
-    if (token?.trim() === configuredApiKey) return;
+// Verify the token and return a stable user identity to scope sessions by.
+// Today every CLI ships the same shared `BROWSER_MANAGER_API_KEY`, so all
+// callers map to a single "shared" identity. When per-user api_keys land
+// (backend HMAC / proxied validation), this is the only place that changes
+// — callers already receive a userId and never look at the token directly.
+export function requireAuth(token?: string): string {
+    if (!configuredApiKey) return 'anonymous';
+    if (token?.trim() === configuredApiKey) return 'shared';
     throw new Error('invalid api key');
 }
 
@@ -38,8 +42,8 @@ export function health() {
 }
 
 export async function createSession(input: CreateSessionInput, token?: string): Promise<SessionInfo> {
-    requireAuth(token);
-    return createBrowserSession(crypto.randomUUID(), { userId: input.user_id, viewport: input.viewport });
+    const userId = requireAuth(token);
+    return createBrowserSession(crypto.randomUUID(), { userId, viewport: input.viewport });
 }
 
 export async function getSession(sessionId: string, token?: string): Promise<SessionInfo | null> {
@@ -47,8 +51,8 @@ export async function getSession(sessionId: string, token?: string): Promise<Ses
     return getBrowserSession(sessionId);
 }
 
-export async function listSessions(userId?: string, token?: string): Promise<SessionInfo[]> {
-    requireAuth(token);
+export async function listSessions(token?: string): Promise<SessionInfo[]> {
+    const userId = requireAuth(token);
     return listBrowserSessions(userId);
 }
 
@@ -57,12 +61,12 @@ export async function deleteSession(sessionId: string, token?: string): Promise<
     await deleteBrowserSession(sessionId);
 }
 
-export async function deleteAllForUser(userId: string, token?: string): Promise<number> {
-    requireAuth(token);
+export async function deleteAllForCaller(token?: string): Promise<number> {
+    const userId = requireAuth(token);
     return deleteBrowserSessionsForUser(userId);
 }
 
-export async function hibernateSession(sessionId: string, token?: string): Promise<boolean> {
+export async function hibernateSession(sessionId: string, token?: string) {
     requireAuth(token);
     return hibernateBrowserSession(sessionId);
 }
@@ -72,7 +76,7 @@ export async function restoreSession(sessionId: string, token?: string): Promise
     return restoreBrowserSession(sessionId);
 }
 
-export async function listHibernated(userId?: string, token?: string): Promise<HibernatedSession[]> {
-    requireAuth(token);
+export async function listHibernated(token?: string): Promise<HibernatedSession[]> {
+    const userId = requireAuth(token);
     return listBrowserHibernated(userId);
 }
