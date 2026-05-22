@@ -107,3 +107,35 @@ npm install
 npm run install-browsers
 npm run dev
 ```
+
+## Pricing
+
+**Cost basis:** 1× VM at $150/mo = 16 cores / 128 GB RAM / 2 TB SSD.
+Weighted unit costs: CPU **$3.09/core/mo**, RAM **$0.586/GB/mo**, SSD **$0.0125/GB/mo**.
+
+### Per-session cost (1 core, 2 GB RAM, 5 GB SSD)
+
+| Component | Qty | $/mo |
+|---|---|---|
+| CPU | 1 | 3.09 |
+| RAM | 2 GB | 1.17 |
+| SSD | 5 GB | 0.06 |
+| **Raw** |   | **$4.32 /mo** ≈ **$0.006 /h** |
+
+### Billable price
+
+| Layer | Factor | Result |
+|---|---|---|
+| Raw | 1.0× | $0.006 /h |
+| + Overhead (proxies, residential IPs, CAPTCHA) | 1.5× | $0.009 /h |
+| + Margin | 3.5× | **$0.03 /h active** |
+
+**Suggested billing:** `$0.03/hour active` or `$0.0005/minute`. Optional add-on: `$0.0001/CDP message` for very chatty automation.
+
+**Break-even:** ≥ ~5,000 browser-hours/mo per VM.
+
+### Web UI
+
+**None.** browser-manager is API-only — REST control plane + Noise RPC + raw CDP WebSocket. Users drive it through their MCP client / SDK / extension; no browser-side panel is shipped.
+
+Public endpoint: `https://bm.todofor.ai/` (API).
