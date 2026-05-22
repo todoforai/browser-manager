@@ -44,7 +44,8 @@ export interface BrowserSession {
 
 export interface ServerConfig {
     port: number;
-    cdpPort: number;        // CDP WebSocket proxy port (was misnamed `adminPort`)
+    adminPort: number;      // Admin REST (cross-user dashboard) — bound to 127.0.0.1, nginx blocks /admin/
+    cdpPort: number;        // CDP WebSocket proxy port
     noisePort: number;
     host: string;
     cors: { origins: string[] };

@@ -168,3 +168,30 @@ export async function listHibernated(token?: string, actAs?: string): Promise<Hi
     const { userId } = await authenticate(token, actAs);
     return listBrowserHibernated(userId);
 }
+
+// ── Admin-only (cross-user) views ────────────────────────────────────────────
+// Used by the /admin/* dashboard. The admin REST server is bound to
+// 127.0.0.1:adminPort (nginx returns 404 for /admin/ as defense-in-depth),
+// so these functions don't re-authenticate — reachability is the gate.
+
+export async function adminListAll(): Promise<SessionInfo[]> {
+    return listBrowserSessions();
+}
+
+export async function adminListHibernated(): Promise<HibernatedSession[]> {
+    return listBrowserHibernated();
+}
+
+export async function adminStats() {
+    const [active, hib] = await Promise.all([listBrowserSessions(), listBrowserHibernated()]);
+    const users = new Set([...active.map(s => s.userId), ...hib.map(h => h.userId)]);
+    return {
+        total:      active.length,
+        active:     active.filter(s => s.status === 'active').length,
+        idle:       active.filter(s => s.status === 'idle').length,
+        hibernated: hib.length,
+        users:      users.size,
+        memory_mb:  Math.round(process.memoryUsage().rss / 1024 / 1024),
+        uptime_s:   Math.round(process.uptime()),
+    };
+}

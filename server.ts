@@ -19,8 +19,13 @@ import { getConfig } from './config.js';
 import sessionsRouter from './api.js';
 import { attachCDPProxy } from './cdp-proxy.js';
 import { startNoiseServer } from './noise-server.js';
-import { health } from './service.js';
-import { deleteAllSessions } from './session-manager.js';
+import { health, adminListAll, adminListHibernated, adminStats } from './service.js';
+import {
+    deleteAllSessions,
+    deleteSession as deleteBrowserSession,
+    hibernateSession as hibernateBrowserSession,
+    restoreSession as restoreBrowserSession,
+} from './session-manager.js';
 
 const config = getConfig();
 
@@ -38,6 +43,38 @@ const webDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'web');
 app.use(express.static(webDir));
 
 const httpServer = createServer(app);
+
+// ── Admin server (cross-user dashboard) ──────────────────────────────────────
+// Bound to 127.0.0.1 only — nginx returns 404 for /admin/ as defense-in-depth,
+// so reachability is the gate. No per-request auth on these routes.
+
+const adminApp = express();
+adminApp.use(express.json());
+const wrapA = (fn: (q: express.Request, r: express.Response) => Promise<unknown>) =>
+    async (q: express.Request, r: express.Response) => {
+        try { await fn(q, r); }
+        catch (e) { r.status(500).json({ error: (e as Error).message }); }
+    };
+adminApp.get   ('/admin/api/stats',               wrapA(async (_q, r) => { r.json(await adminStats()); }));
+adminApp.get   ('/admin/api/sessions',            wrapA(async (_q, r) => { r.json(await adminListAll()); }));
+adminApp.get   ('/admin/api/sessions/hibernated', wrapA(async (_q, r) => { r.json(await adminListHibernated()); }));
+adminApp.post  ('/admin/api/sessions/:id/hibernate', wrapA(async (q, r) => {
+    const result = await hibernateBrowserSession(String(q.params.id));
+    if (result === 'not_found') return r.status(404).json({ error: 'Session not found' });
+    if (result === 'in_use')    return r.status(409).json({ error: 'Session has active connections' });
+    r.json({ success: true });
+}));
+adminApp.post  ('/admin/api/sessions/:id/restore', wrapA(async (q, r) => {
+    const info = await restoreBrowserSession(String(q.params.id));
+    if (!info) return r.status(404).json({ error: 'No hibernated session found' });
+    r.json(info);
+}));
+adminApp.delete('/admin/api/sessions/:id', wrapA(async (q, r) => {
+    await deleteBrowserSession(String(q.params.id));
+    r.json({ success: true });
+}));
+adminApp.use(express.static(webDir));
+const adminServer = createServer(adminApp);
 
 // ── CDP proxy server (internal only) ──────────────────────────────────────────
 
@@ -57,12 +94,21 @@ function listen(srv: ReturnType<typeof createServer>, port: number, label: strin
 async function start() {
     await listen(cdpServer,  config.cdpPort, 'CDP proxy');
     await listen(httpServer, config.port,    'REST API');
+    // Admin server: localhost-only bind (nginx returns 404 on /admin/).
+    await new Promise<void>((resolve, reject) => {
+        adminServer.once('error', reject);
+        adminServer.listen(config.adminPort, '127.0.0.1', () => {
+            console.log(`🛠  Admin REST 127.0.0.1:${config.adminPort}`);
+            resolve();
+        });
+    });
     console.log(`📊 Health: http://localhost:${config.port}/health`);
 
     const shutdown = async (sig: string) => {
         console.log(`\n🛑 ${sig}`);
         await deleteAllSessions();
         httpServer.close();
+        adminServer.close();
         cdpServer.close();
         noiseServer?.close();
         process.exit(0);
