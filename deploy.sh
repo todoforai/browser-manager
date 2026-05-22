@@ -19,8 +19,8 @@ source "$(dirname "$0")/scripts/deploy-lib.sh"
 # Coexists with `browsing` on the same host (which owns browser.todofor.ai
 # + ports 8085/8086 — unrelated legacy service).
 # browser-manager runs on bm.todofor.ai with blue/green slots:
-#   Slot A: REST 8600 / CDP 8620 / Noise 8630
-#   Slot B: REST 8602 / CDP 8622 / Noise 8632
+#   Slot A: REST 8600 / Admin 8610 / CDP 8620 / Noise 8630
+#   Slot B: REST 8602 / Admin 8612 / CDP 8622 / Noise 8632
 SERVER="${SERVER:-root@browser.todofor.ai}"
 DEPLOY_PATH="/var/www/todoforai/apps/browser-manager"
 REPO="git@github.com:todoforai/browser-manager.git"

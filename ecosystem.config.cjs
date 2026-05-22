@@ -16,11 +16,12 @@ function loadEnvFile(p) {
 }
 
 // REST port; deploy.sh sets DEPLOY_PORT for blue-green flips. Default 8600.
-// Slot A: REST 8600 / CDP 8620 / Noise 8630.
-// Slot B: REST 8602 / CDP 8622 / Noise 8632.
+// Slot A: REST 8600 / Admin 8610 / CDP 8620 / Noise 8630.
+// Slot B: REST 8602 / Admin 8612 / CDP 8622 / Noise 8632.
 // Coexists with `browsing` (which owns 8085/8086 on the same host — unrelated service).
 const port = process.env.DEPLOY_PORT || '8600';
 const portN = parseInt(port, 10);
+const adminPort = String(portN + 10);
 const cdpPort   = String(portN + 20);
 const noisePort = String(portN + 30);
 
@@ -60,6 +61,7 @@ module.exports = {
         ...envFromDisk,
         NODE_ENV: 'production',
         BROWSER_MANAGER_PORT: port,
+        BROWSER_MANAGER_ADMIN_PORT: adminPort,
         BROWSER_MANAGER_CDP_PORT: cdpPort,
         BROWSER_MANAGER_NOISE_PORT: noisePort,
       },

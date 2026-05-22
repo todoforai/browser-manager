@@ -23,10 +23,11 @@ browser-manager/
 | Server | Port | Purpose |
 |--------|------|---------|
 | REST API | `8600` | session CRUD (`/api/sessions`), health |
+| Admin REST | `8610` | cross-user admin dashboard, bound to `127.0.0.1` — **internal only** |
 | CDP proxy | `8620` | raw CDP WS relay (`/cdp/:sessionId`) — **internal only** |
 | Noise RPC | `8630` | encrypted TCP RPC for internal CLI/agent use |
 
-The CDP proxy and Noise RPC ports should never be exposed publicly — the backend proxies them with auth/billing.
+The Admin REST, CDP proxy, and Noise RPC ports should never be exposed publicly — the backend proxies them with auth/billing.
 
 ## Auth model
 
@@ -52,7 +53,7 @@ DELETE /api/sessions              → { deleted: N }  (scoped to caller)
 
 GET    /health                    → { status, uptime, memory }
 
-WS     /cdp/:sessionId            raw CDP WebSocket proxy (admin port)
+WS     /cdp/:sessionId            raw CDP WebSocket proxy (CDP port)
 ```
 
 Headers:
