@@ -4,12 +4,14 @@
  * server.ts — entry point
  * 
  * Two servers:
- *   adminServer (:8085) — CDP WebSocket proxy (internal, no auth)
- *   httpServer  (:8086) — REST API for session CRUD + health
+ *   cdpServer  (:8620) — CDP WebSocket proxy (internal, no auth)
+ *   httpServer (:8600) — REST API for session CRUD + health
  */
 
 import express from 'express';
 import { createServer } from 'http';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import cors from 'cors';
 import 'dotenv/config';
 
@@ -31,12 +33,16 @@ app.use(express.json());
 app.get('/health', (_req, res) => res.json(health()));
 app.use('/api/sessions', sessionsRouter);
 
+// Static user UI — see web/index.html. Mounted last so API routes win.
+const webDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'web');
+app.use(express.static(webDir));
+
 const httpServer = createServer(app);
 
-// ── Admin server (CDP proxy, internal only) ───────────────────────────────────
+// ── CDP proxy server (internal only) ──────────────────────────────────────────
 
-const adminServer = createServer();
-attachCDPProxy(adminServer);
+const cdpServer = createServer();
+attachCDPProxy(cdpServer);
 const noiseServer = startNoiseServer(config.host, config.noisePort);
 
 // ── Start ─────────────────────────────────────────────────────────────────────
@@ -49,15 +55,15 @@ function listen(srv: ReturnType<typeof createServer>, port: number, label: strin
 }
 
 async function start() {
-    await listen(adminServer, config.adminPort, 'CDP proxy (admin)');
-    await listen(httpServer,  config.port,      'REST API');
+    await listen(cdpServer,  config.cdpPort, 'CDP proxy');
+    await listen(httpServer, config.port,    'REST API');
     console.log(`📊 Health: http://localhost:${config.port}/health`);
 
     const shutdown = async (sig: string) => {
         console.log(`\n🛑 ${sig}`);
         await deleteAllSessions();
         httpServer.close();
-        adminServer.close();
+        cdpServer.close();
         noiseServer?.close();
         process.exit(0);
     };

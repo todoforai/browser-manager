@@ -44,7 +44,7 @@ export interface BrowserSession {
 
 export interface ServerConfig {
     port: number;
-    adminPort: number;
+    cdpPort: number;        // CDP WebSocket proxy port (was misnamed `adminPort`)
     noisePort: number;
     host: string;
     cors: { origins: string[] };

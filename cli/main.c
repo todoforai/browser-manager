@@ -7,7 +7,7 @@
 ///
 /// Env overrides (rarely needed):
 ///   BROWSER_NOISE_HOST   browser-manager host (default: bm.todofor.ai)
-///   BROWSER_NOISE_PORT   browser-manager port (default: 4120 prod, 8087 dev)
+///   BROWSER_NOISE_PORT   browser-manager port (default: 4120 prod, 8630 dev)
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,7 +20,7 @@
 
 #define DEFAULT_BROWSER_HOST     "bm.todofor.ai"
 #define DEFAULT_BROWSER_PORT     "4120"
-#define DEV_BROWSER_PORT         "8087"
+#define DEV_BROWSER_PORT         "8630"
 
 static void fatal(const char *msg) { fprintf(stderr, "error: %s\n", msg); exit(1); }
 

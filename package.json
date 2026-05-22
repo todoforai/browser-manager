@@ -9,6 +9,7 @@
     "start": "tsx server.ts",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
+    "web:dev": "bun run web/dev-server.js",
     "install-browsers": "npx playwright install chromium"
   },
   "dependencies": {
@@ -20,6 +21,7 @@
     "ws": "^8.18.0"
   },
   "devDependencies": {
+    "@shared/web": "file:../packages/shared-web",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/node": "^24.0.0",

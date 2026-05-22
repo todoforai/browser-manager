@@ -17,16 +17,19 @@ set -e
 source "$(dirname "$0")/scripts/deploy-lib.sh"
 
 # Coexists with `browsing` on the same host (which owns browser.todofor.ai
-# + ports 8085/8086). browser-manager runs on bm.todofor.ai + 8090/8092.
+# + ports 8085/8086 — unrelated legacy service).
+# browser-manager runs on bm.todofor.ai with blue/green slots:
+#   Slot A: REST 8600 / CDP 8620 / Noise 8630
+#   Slot B: REST 8602 / CDP 8622 / Noise 8632
 SERVER="${SERVER:-root@browser.todofor.ai}"
 DEPLOY_PATH="/var/www/todoforai/apps/browser-manager"
 REPO="git@github.com:todoforai/browser-manager.git"
 BRANCH="prod"
 KEEP_RELEASES=5
 
-# Blue/green REST ports. Noise port = REST + 1.
-PORT_A=8090
-PORT_B=8092
+# Blue/green REST ports. Noise port = REST + 30; CDP port = REST + 20.
+PORT_A=8600
+PORT_B=8602
 
 deploy() {
     check_prod_status
@@ -68,6 +71,18 @@ deploy() {
 
         echo "Rolling deploy..."
         cd $DEPLOY_PATH/current
+
+        # One-shot migration cleanup: remove pre-migration PM2 names from the
+        # 8090/8092 era. They no longer match $PORT_A/$PORT_B so the normal
+        # detection below would leave them orphaned. Safe to remove on every
+        # deploy — does nothing once the units are gone.
+        for legacy in browser-manager-8090 browser-manager-8092; do
+            if pm2 list 2>/dev/null | grep -q "\$legacy"; then
+                echo "Stopping legacy PM2 process: \$legacy"
+                pm2 delete "\$legacy" 2>/dev/null || true
+            fi
+        done
+        pm2 save --force
 
         # Determine which port is currently active under PM2
         OLD_PORT=""
@@ -114,9 +129,9 @@ deploy() {
         sed -i "s|server 127.0.0.1:$PORT_B[^;]*;|server 127.0.0.1:$PORT_B down;|g" \$NGINX_CONF
         sed -i "s|server 127.0.0.1:\$NEW_PORT down;|server 127.0.0.1:\$NEW_PORT max_fails=2 fail_timeout=5s;|" \$NGINX_CONF
 
-        NEW_NOISE=\$((NEW_PORT + 1))
-        NOISE_A=\$(($PORT_A + 1))
-        NOISE_B=\$(($PORT_B + 1))
+        NEW_NOISE=\$((NEW_PORT + 30))
+        NOISE_A=\$(($PORT_A + 30))
+        NOISE_B=\$(($PORT_B + 30))
         sed -i "s|server 127.0.0.1:\$NOISE_A[^;]*;|server 127.0.0.1:\$NOISE_A down;|g" \$STREAM_CONF
         sed -i "s|server 127.0.0.1:\$NOISE_B[^;]*;|server 127.0.0.1:\$NOISE_B down;|g" \$STREAM_CONF
         sed -i "s|server 127.0.0.1:\$NEW_NOISE down;|server 127.0.0.1:\$NEW_NOISE max_fails=2 fail_timeout=5s;|" \$STREAM_CONF
@@ -188,9 +203,9 @@ rollback() {
             sleep 2
         done
 
-        ROLLBACK_NOISE=$((ROLLBACK_PORT + 1))
-        NOISE_A=$((PORT_A + 1))
-        NOISE_B=$((PORT_B + 1))
+        ROLLBACK_NOISE=$((ROLLBACK_PORT + 30))
+        NOISE_A=$((PORT_A + 30))
+        NOISE_B=$((PORT_B + 30))
         sed -i "s|server 127.0.0.1:$PORT_A[^;]*;|server 127.0.0.1:$PORT_A down;|g" $NGINX_CONF
         sed -i "s|server 127.0.0.1:$PORT_B[^;]*;|server 127.0.0.1:$PORT_B down;|g" $NGINX_CONF
         sed -i "s|server 127.0.0.1:${ROLLBACK_PORT} down;|server 127.0.0.1:${ROLLBACK_PORT} max_fails=2 fail_timeout=5s;|" $NGINX_CONF

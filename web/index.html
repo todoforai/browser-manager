@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Browsers · TODO for AI</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="shared/theme.css">
+<style>
+  /* Browser-manager specific bits — session card + viewport picker. */
+  .sess-list { display: flex; flex-direction: column; gap: 10px; }
+  .sess {
+    display: grid;
+    grid-template-columns: 4px 1fr auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--card);
+    overflow: hidden;
+    transition: border-color .12s;
+  }
+  .sess:hover { border-color: color-mix(in srgb, var(--foreground) 18%, transparent); }
+  .sess-stripe { background: var(--muted-foreground); }
+  .sess[data-status="active"]     .sess-stripe { background: var(--success); }
+  .sess[data-status="idle"]       .sess-stripe { background: var(--warning); }
+  .sess[data-status="hibernated"] .sess-stripe { background: var(--muted-foreground); }
+  .sess-body { padding: 14px 18px; min-width: 0; }
+  .sess-row1 { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+  .sess-id { font-family: var(--font-mono); font-size: 12px; color: var(--muted-foreground); }
+  .sess-id code { color: var(--foreground); }
+  .sess-state {
+    font-size: 11px; font-weight: 500; padding: 3px 10px; border-radius: 999px;
+    border: 1px solid currentColor; background: color-mix(in srgb, currentColor 8%, transparent);
+    text-transform: capitalize; color: var(--muted-foreground);
+  }
+  .sess[data-status="active"]     .sess-state { color: var(--success); }
+  .sess[data-status="idle"]       .sess-state { color: var(--warning); }
+  .sess-title { font-weight: 600; font-size: 14px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sess-url { color: var(--muted-foreground); font-size: 12px; font-family: var(--font-mono); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sess-row2 { display: flex; gap: 18px; flex-wrap: wrap; color: var(--muted-foreground); font-size: 13px; }
+  .sess-row2 .kv { display: inline-flex; gap: 6px; align-items: baseline; }
+  .sess-row2 .kv b { color: var(--foreground); font-weight: 500; }
+  .sess-actions { display: flex; align-items: center; gap: 6px; padding: 10px 14px; border-left: 1px solid var(--border); }
+  .sess-actions button { padding: 6px 10px; font-size: 12px; }
+
+  .viewports { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+  .vp {
+    padding: 10px 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    font-size: 13px;
+    background: var(--background);
+  }
+  .vp:hover { border-color: color-mix(in srgb, var(--foreground) 25%, transparent); }
+  .vp.sel { border-color: var(--primary); background: color-mix(in srgb, var(--primary) 8%, var(--card)); }
+  .vp .l { font-weight: 600; }
+  .vp .m { color: var(--muted-foreground); font-size: 12px; margin-top: 2px; font-family: var(--font-mono); }
+</style>
+</head>
+<body>
+
+<header class="app-bar">
+  <div class="bar">
+    <a class="brand" href="/" aria-label="TODO for AI — Browsers">
+      <span class="dot"></span>
+      TODO <b>for</b> AI
+      <span class="crumbs" style="margin-left:8px"><span class="sep">/</span> Browsers</span>
+    </a>
+    <div></div>
+    <div id="user-chip"></div>
+  </div>
+</header>
+
+<main class="app-main" id="app">
+  <div class="placeholder">
+    <span class="spinner"></span>
+    <p style="margin-top:14px">Connecting…</p>
+  </div>
+</main>
+
+<footer class="app-footer">
+  CDP via Playwright · <a href="https://todofor.ai" target="_blank" rel="noopener noreferrer">todofor.ai</a>
+</footer>
+
+<script type="module">
+import { makeAuth, el, $, fmtAge, renderSignIn } from './shared/auth.js';
+
+const { api, setToken } = makeAuth('browser');
+
+const VIEWPORTS = [
+  { l: 'Desktop',     w: 1280, h: 720 },
+  { l: 'Laptop',      w: 1440, h: 900 },
+  { l: 'Tablet',      w: 1024, h: 768 },
+  { l: 'Mobile',      w:  390, h: 844 },
+];
+
+const state = {
+  authed: null,
+  sessions: [],
+  hibernated: [],
+  err: null,
+  pending: null,        // `${id}:${action}` in flight
+  showCreate: false,
+  selectedViewport: VIEWPORTS[0],
+};
+
+async function loadAll() {
+  try {
+    const [list, hib] = await Promise.all([
+      api('/api/sessions'),
+      api('/api/sessions/hibernated').catch(() => []),
+    ]);
+    state.sessions = list || [];
+    state.hibernated = hib || [];
+    state.authed = true;
+    state.err = null;
+  } catch (e) {
+    if (e.unauth) { state.authed = false; render(); return; }
+    state.authed = true;
+    state.err = e.message;
+  }
+  render();
+}
+
+async function act(id, action) {
+  state.pending = `${id}:${action}`;
+  render();
+  try {
+    if (action === 'delete')    await api(`/api/sessions/${id}`,            { method: 'DELETE' });
+    if (action === 'hibernate') await api(`/api/sessions/${id}/hibernate`,  { method: 'POST' });
+    if (action === 'restore')   await api(`/api/sessions/${id}/restore`,    { method: 'POST' });
+    await loadAll();
+  } catch (e) {
+    state.err = e.message;
+  } finally {
+    state.pending = null;
+    render();
+  }
+}
+
+async function createSession(vp) {
+  state.pending = `create`;
+  render();
+  try {
+    await api('/api/sessions', { method: 'POST', body: { viewport: { width: vp.w, height: vp.h } } });
+    state.showCreate = false;
+    await loadAll();
+  } catch (e) {
+    state.err = e.message;
+  } finally {
+    state.pending = null;
+    render();
+  }
+}
+
+function render() {
+  const root = $('#app');
+  root.innerHTML = '';
+  $('#user-chip').innerHTML = '';
+
+  if (state.authed === false) {
+    root.appendChild(renderSignIn({
+      onUseToken: t => { setToken(t); state.authed = null; render(); loadAll(); },
+    }));
+    return;
+  }
+  if (state.authed === null) {
+    root.appendChild(el('div', { class: 'placeholder' },
+      el('span', { class: 'spinner' }),
+      el('p', { style: 'margin-top:14px' }, 'Connecting…'),
+    ));
+    return;
+  }
+
+  const n = state.sessions.length;
+  $('#user-chip').appendChild(
+    el('span', { class: 'user-chip' },
+      el('span', { class: 'dot' }),
+      `${n} session${n === 1 ? '' : 's'}`,
+    ),
+  );
+
+  root.appendChild(
+    el('div', { class: 'page-head' },
+      el('div', {},
+        el('h1', {}, 'Browsers'),
+        el('p', { class: 'sub' }, 'Headless Chromium sessions driven over CDP. Each session is a real browser your agents can drive via Playwright, Puppeteer, or raw CDP.'),
+      ),
+      el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' },
+        el('button', { class: 'ghost', onclick: loadAll }, '↻ Refresh'),
+        el('button', { class: 'primary', onclick: () => { state.showCreate = true; render(); } }, 'New browser'),
+      ),
+    ),
+  );
+
+  const active = state.sessions.filter(s => s.status === 'active').length;
+  const idle   = state.sessions.filter(s => s.status === 'idle').length;
+  const hib    = state.hibernated.length;
+  root.appendChild(el('div', { class: 'stats' },
+    stat('Total',      n),
+    stat('Active',     active),
+    stat('Idle',       idle),
+    stat('Hibernated', hib),
+  ));
+
+  if (state.err) root.appendChild(el('div', { class: 'err-msg' }, '⚠ ', state.err));
+
+  if (n === 0 && hib === 0) {
+    root.appendChild(el('div', { class: 'placeholder' },
+      el('h2', {}, 'No browser sessions'),
+      el('p', {}, 'Spin one up to let an agent open pages, click buttons, and read DOM.'),
+      el('div', { class: 'actions' },
+        el('button', { class: 'primary', onclick: () => { state.showCreate = true; render(); } }, 'Create your first session'),
+      ),
+    ));
+  } else {
+    const list = el('div', { class: 'sess-list' });
+    for (const s of state.sessions)   list.appendChild(renderSession(s));
+    for (const h of state.hibernated) list.appendChild(renderHibernated(h));
+    root.appendChild(list);
+  }
+
+  if (state.showCreate) root.appendChild(renderCreateModal());
+}
+
+function stat(label, value) {
+  return el('div', { class: 'stat' },
+    el('div', { class: 'l' }, label),
+    el('div', { class: 'v' }, String(value)),
+  );
+}
+
+function renderSession(s) {
+  const busy = act => state.pending === `${s.sessionId}:${act}`;
+  const anyBusy = state.pending && state.pending.startsWith(s.sessionId + ':');
+  return el('div', { class: 'sess', 'data-status': s.status },
+    el('div', { class: 'sess-stripe' }),
+    el('div', { class: 'sess-body' },
+      el('div', { class: 'sess-row1' },
+        el('div', { class: 'sess-title' }, s.title || '(no title)'),
+        el('div', { class: 'sess-state' }, s.status),
+        el('div', { class: 'sess-id' }, 'id ', el('code', {}, s.sessionId.slice(0, 12)), '…'),
+      ),
+      s.url ? el('div', { class: 'sess-url' }, s.url) : null,
+      el('div', { class: 'sess-row2', style: 'margin-top:8px' },
+        kv('viewport', `${s.viewport.width}×${s.viewport.height}`),
+        kv('connections', String(s.connections)),
+        kv('age', fmtAge(s.createdAt)),
+        kv('idle', fmtAge(s.lastActiveAt)),
+      ),
+    ),
+    el('div', { class: 'sess-actions' },
+      s.status !== 'hibernated' ? btn('Hibernate', () => act(s.sessionId, 'hibernate'), { disabled: anyBusy, busy: busy('hibernate') }) : null,
+      btn('Delete', () => {
+        if (confirm(`Delete browser session ${s.sessionId.slice(0,8)}…?`)) act(s.sessionId, 'delete');
+      }, { disabled: anyBusy, busy: busy('delete'), cls: 'danger' }),
+    ),
+  );
+}
+
+function renderHibernated(h) {
+  const busy = state.pending === `${h.sessionId}:restore`;
+  return el('div', { class: 'sess', 'data-status': 'hibernated' },
+    el('div', { class: 'sess-stripe' }),
+    el('div', { class: 'sess-body' },
+      el('div', { class: 'sess-row1' },
+        el('div', { class: 'sess-title' }, h.title || '(hibernated)'),
+        el('div', { class: 'sess-state' }, 'hibernated'),
+        el('div', { class: 'sess-id' }, 'id ', el('code', {}, h.sessionId.slice(0, 12)), '…'),
+      ),
+      h.url ? el('div', { class: 'sess-url' }, h.url) : null,
+      el('div', { class: 'sess-row2', style: 'margin-top:8px' },
+        kv('hibernated', fmtAge(h.hibernatedAt)),
+      ),
+    ),
+    el('div', { class: 'sess-actions' },
+      btn('Restore', () => act(h.sessionId, 'restore'), { busy, disabled: busy, cls: 'primary' }),
+    ),
+  );
+}
+
+function kv(k, v) {
+  return el('span', { class: 'kv' },
+    el('span', {}, k + ':'),
+    el('b', {}, String(v)),
+  );
+}
+
+function btn(label, onclick, { disabled, busy, cls } = {}) {
+  return el('button', { class: cls || '', disabled: disabled || busy, onclick },
+    busy ? el('span', { class: 'spinner' }) : null,
+    label,
+  );
+}
+
+function renderCreateModal() {
+  const sel = state.selectedViewport;
+  const busy = state.pending === 'create';
+  const grid = el('div', { class: 'viewports' });
+  for (const v of VIEWPORTS) {
+    grid.appendChild(el('div', {
+      class: 'vp' + (v === sel ? ' sel' : ''),
+      onclick: () => { state.selectedViewport = v; render(); },
+    },
+      el('div', { class: 'l' }, v.l),
+      el('div', { class: 'm' }, `${v.w}×${v.h}`),
+    ));
+  }
+  const bg = el('div', { class: 'modal-bg', style: 'position:fixed;inset:0;background:rgba(0,0,0,0.6);display:grid;place-items:center;z-index:100;padding:20px',
+    onclick: e => { if (e.target === bg) { state.showCreate = false; render(); } },
+  },
+    el('div', { style: 'background:var(--card);border:1px solid var(--border);border-radius:var(--radius-lg);width:min(540px,100%);box-shadow:var(--shadow-lg);overflow:hidden' },
+      el('div', { style: 'padding:18px 22px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center' },
+        el('h3', { style: 'margin:0;font-size:17px;font-weight:600' }, 'New browser session'),
+        el('button', { class: 'ghost', style: 'padding:6px 10px', onclick: () => { state.showCreate = false; render(); } }, '×'),
+      ),
+      el('div', { style: 'padding:20px 22px' },
+        el('div', { style: 'margin-bottom:10px;color:var(--muted-foreground);font-size:13px' }, 'Pick a viewport'),
+        grid,
+        el('p', { style: 'color:var(--muted-foreground);font-size:13px;margin:0' },
+          'A fresh Chromium instance is launched. Drive it via CDP — pause/hibernate to save memory while idle.'),
+      ),
+      el('div', { style: 'padding:14px 22px;border-top:1px solid var(--border);display:flex;gap:10px;justify-content:flex-end' },
+        el('button', { onclick: () => { state.showCreate = false; render(); } }, 'Cancel'),
+        el('button', { class: 'primary', disabled: busy, onclick: () => createSession(sel) },
+          busy ? el('span', { class: 'spinner' }) : null,
+          busy ? 'Launching…' : 'Launch',
+        ),
+      ),
+    ),
+  );
+  return bg;
+}
+
+loadAll();
+setInterval(() => { if (state.authed && !document.hidden) loadAll(); }, 8000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden && state.authed) loadAll(); });
+</script>
+</body>
+</html>

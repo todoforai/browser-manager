@@ -15,13 +15,14 @@ function loadEnvFile(p) {
   return out;
 }
 
-// REST port; deploy.sh sets DEPLOY_PORT for blue-green flips. Default 8090.
-// Noise port is paired: REST + 1 (so 8090→8091, 8092→8093).
-// Coexists with `browsing` (which owns 8085/8086 on the same host).
-const port = process.env.DEPLOY_PORT || '8090';
-const noisePort = String(parseInt(port, 10) + 1);
-// Admin port stays internal; pair across blue/green slots (8094/8095).
-const adminPort = String(parseInt(port, 10) === 8090 ? 8094 : 8095);
+// REST port; deploy.sh sets DEPLOY_PORT for blue-green flips. Default 8600.
+// Slot A: REST 8600 / CDP 8620 / Noise 8630.
+// Slot B: REST 8602 / CDP 8622 / Noise 8632.
+// Coexists with `browsing` (which owns 8085/8086 on the same host — unrelated service).
+const port = process.env.DEPLOY_PORT || '8600';
+const portN = parseInt(port, 10);
+const cdpPort   = String(portN + 20);
+const noisePort = String(portN + 30);
 
 const logDir = process.env.PM2_LOG_DIR
   || (fs.existsSync('/var/log/todoforai') ? '/var/log/todoforai' : null);
@@ -59,7 +60,7 @@ module.exports = {
         ...envFromDisk,
         NODE_ENV: 'production',
         BROWSER_MANAGER_PORT: port,
-        BROWSER_MANAGER_ADMIN_PORT: adminPort,
+        BROWSER_MANAGER_CDP_PORT: cdpPort,
         BROWSER_MANAGER_NOISE_PORT: noisePort,
       },
     },

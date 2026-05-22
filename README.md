@@ -22,9 +22,9 @@ browser-manager/
 
 | Server | Port | Purpose |
 |--------|------|---------|
-| REST API | `8086` | session CRUD (`/api/sessions`), health |
-| CDP proxy | `8085` | raw CDP WS relay (`/cdp/:sessionId`) — **internal only** |
-| Noise RPC | `8087` | encrypted TCP RPC for internal CLI/agent use |
+| REST API | `8600` | session CRUD (`/api/sessions`), health |
+| CDP proxy | `8620` | raw CDP WS relay (`/cdp/:sessionId`) — **internal only** |
+| Noise RPC | `8630` | encrypted TCP RPC for internal CLI/agent use |
 
 The CDP proxy and Noise RPC ports should never be exposed publicly — the backend proxies them with auth/billing.
 
@@ -98,7 +98,7 @@ cd cli && make linux
 CLI env (rarely needed):
 
 - `BROWSER_NOISE_HOST` — browser-manager host (default: `bm.todofor.ai`)
-- `BROWSER_NOISE_PORT` — browser-manager port (default: `4120` prod / `8087` dev)
+- `BROWSER_NOISE_PORT` — browser-manager port (default: `4120` prod / `8630` dev)
 
 ## Dev
 
@@ -136,6 +136,9 @@ Weighted unit costs: CPU **$3.09/core/mo**, RAM **$0.586/GB/mo**, SSD **$0.0125/
 
 ### Web UI
 
-**None.** browser-manager is API-only — REST control plane + Noise RPC + raw CDP WebSocket. Users drive it through their MCP client / SDK / extension; no browser-side panel is shipped.
+- **User panel** — `web/index.html`, served by the REST process at `https://bm.todofor.ai/`. List, create, hibernate/restore, delete browser sessions. Cookie-first auth on `*.todofor.ai`; Bearer-fallback in dev (`bun run web:dev` → http://localhost:8650).
+- **Admin panel** — none yet. Cross-user inspection is via `X-Act-As: <userId>` on the same REST endpoints with `BROWSER_MANAGER_ADMIN_KEY`.
 
-Public endpoint: `https://bm.todofor.ai/` (API).
+The panel reuses [`@shared/web`](../packages/shared-web/) — theme tokens (`web/shared/theme.css`), the auth helper (`web/shared/auth.js`), and the dev-server factory. Refresh the vendored snapshot with `scripts/sync-shared-web.sh`.
+
+CDP WebSocket (`/cdp/:sessionId`) and Noise RPC (`:8630`) remain internal-only — the panel only talks to the REST control plane.
