@@ -1,6 +1,7 @@
 node_modules/
 dist/
 hibernate-data/
-.env
+.env.local
+.env.*.local
 
 cli/build/
