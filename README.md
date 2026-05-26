@@ -137,9 +137,11 @@ Weighted unit costs: CPU **$3.09/core/mo**, RAM **$0.586/GB/mo**, SSD **$0.0125/
 
 ### Web UI
 
-- **User panel** — `web/index.html`, served by the REST process at `https://bm.todofor.ai/`. List, create, hibernate/restore, delete browser sessions. Cookie-first auth on `*.todofor.ai`; Bearer-fallback in dev (`bun run web:dev` → http://localhost:8650).
-- **Admin panel** — none yet. Cross-user inspection is via `X-Act-As: <userId>` on the same REST endpoints with `BROWSER_MANAGER_ADMIN_KEY`.
+Two dev servers (mirroring prod's two-socket pattern — see [`@shared/web`](../packages/shared-web/)):
 
-The panel reuses [`@shared/web`](../packages/shared-web/) — theme tokens (`web/shared/theme.css`), the auth helper (`web/shared/auth.js`), and the dev-server factory. Refresh the vendored snapshot with `scripts/sync-shared-web.sh`.
+- **User panel** — `web/index.html`, served by the REST process at `https://bm.todofor.ai/`. List, create, hibernate/restore, delete browser sessions. Cookie-first auth on `*.todofor.ai`; Bearer-fallback in dev (`bun run web:dev` → http://localhost:8650 → proxies to public REST `:8600`).
+- **Admin panel** — `web/admin.html` (http://localhost:8680 in dev → proxies to admin REST `:8610`). Cross-user session list / stats / per-session hibernate/restore/delete. In prod the admin socket is bound to `127.0.0.1` — reach it via SSH tunnel; nginx 404s `/admin/` as defense-in-depth.
+
+Both panels reuse [`@shared/web`](../packages/shared-web/) — theme tokens (`web/shared/theme.css`), the auth helper (`web/shared/auth.js`), and the dev-server factory. Refresh the vendored snapshot with `scripts/sync-shared-web.sh`.
 
 CDP WebSocket (`/cdp/:sessionId`) and Noise RPC (`:8630`) remain internal-only — the panel only talks to the REST control plane.

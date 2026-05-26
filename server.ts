@@ -19,6 +19,7 @@ import { getConfig } from './config.js';
 import sessionsRouter from './api.js';
 import { attachCDPProxy } from './cdp-proxy.js';
 import { startNoiseServer } from './noise-server.js';
+import { startAdminServer } from '@shared/web/server-helpers';
 import { health, adminListAll, adminListHibernated, adminStats } from './service.js';
 import {
     deleteAllSessions,
@@ -38,15 +39,22 @@ app.use(express.json());
 app.get('/health', (_req, res) => res.json(health()));
 app.use('/api/sessions', sessionsRouter);
 
-// Static user UI — see web/index.html. Mounted last so API routes win.
 const webDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'web');
+
+// Admin UI is served only by adminApp; keep it out of the public static mount.
+// /admin.html is also blocked because the file lives in webDir (sandbox shape).
+app.use('/admin', (_req, res) => res.status(404).end());
+app.get('/admin.html', (_req, res) => res.status(404).end());
+
+// Static user UI — see web/index.html. Mounted last so API routes win.
 app.use(express.static(webDir));
 
 const httpServer = createServer(app);
 
 // ── Admin server (cross-user dashboard) ──────────────────────────────────────
-// Bound to 127.0.0.1 only — nginx returns 404 for /admin/ as defense-in-depth,
-// so reachability is the gate. No per-request auth on these routes.
+// Bound to 127.0.0.1:<adminPort> via startAdminServer (two-socket pattern,
+// see packages/shared-web/README.md). Reachability is the gate — nginx 404s
+// /admin/ on the public vhost as defense-in-depth.
 
 const adminApp = express();
 adminApp.use(express.json());
@@ -73,8 +81,11 @@ adminApp.delete('/admin/api/sessions/:id', wrapA(async (q, r) => {
     await deleteBrowserSession(String(q.params.id));
     r.json({ success: true });
 }));
+// Serve the admin static UI on the same private socket (so an SSH tunnel
+// against :8610 gets both the admin REST + the admin dashboard).
+adminApp.get('/admin', (_req, res) => res.sendFile(path.join(webDir, 'admin.html')));
+adminApp.get('/admin/', (_req, res) => res.sendFile(path.join(webDir, 'admin.html')));
 adminApp.use(express.static(webDir));
-const adminServer = createServer(adminApp);
 
 // ── CDP proxy server (internal only) ──────────────────────────────────────────
 
@@ -94,14 +105,7 @@ function listen(srv: ReturnType<typeof createServer>, port: number, label: strin
 async function start() {
     await listen(cdpServer,  config.cdpPort, 'CDP proxy');
     await listen(httpServer, config.port,    'REST API');
-    // Admin server: localhost-only bind (nginx returns 404 on /admin/).
-    await new Promise<void>((resolve, reject) => {
-        adminServer.once('error', reject);
-        adminServer.listen(config.adminPort, '127.0.0.1', () => {
-            console.log(`🛠  Admin REST 127.0.0.1:${config.adminPort}`);
-            resolve();
-        });
-    });
+    const adminServer = await startAdminServer(adminApp, config.adminPort);
     console.log(`📊 Health: http://localhost:${config.port}/health`);
 
     const shutdown = async (sig: string) => {
