@@ -23,7 +23,7 @@ makeDevServer({
   port: 8680,
   api: "http://127.0.0.1:8610",
   apiPrefixes: ["/admin/api/"],
-  pages: { "/": "/admin.html", "/admin": "/admin.html", "/admin/": "/admin.html" },
+  pages: { "/": "/admin/index.html", "/admin": "/admin/index.html", "/admin/": "/admin/index.html" },
   root,
   label: "browser-manager dev (admin)",
 });

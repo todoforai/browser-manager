@@ -12,6 +12,7 @@ import express from 'express';
 import { createServer } from 'http';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { timingSafeEqual } from 'crypto';
 import cors from 'cors';
 import 'dotenv/config';
 
@@ -42,9 +43,7 @@ app.use('/api/sessions', sessionsRouter);
 const webDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'web');
 
 // Admin UI is served only by adminApp; keep it out of the public static mount.
-// /admin.html is also blocked because the file lives in webDir (sandbox shape).
 app.use('/admin', (_req, res) => res.status(404).end());
-app.get('/admin.html', (_req, res) => res.status(404).end());
 
 // Static user UI — see web/index.html. Mounted last so API routes win.
 app.use(express.static(webDir));
@@ -58,6 +57,21 @@ const httpServer = createServer(app);
 
 const adminApp = express();
 adminApp.use(express.json());
+
+// Bearer admin-key gate on /admin/api/*. Mirrors vault-manager/storage-manager.
+// The loopback bind is the primary boundary; this is defense-in-depth.
+function safeEq(a: string, b: string): boolean {
+    const ab = Buffer.from(a, 'utf8');
+    const bb = Buffer.from(b, 'utf8');
+    return ab.length === bb.length && timingSafeEqual(ab, bb);
+}
+adminApp.use('/admin/api', (req, res, next) => {
+    if (!config.adminKey) return res.status(503).json({ error: 'admin API disabled: BROWSER_MANAGER_ADMIN_KEY not configured' });
+    const bearer = (req.headers.authorization || '').trim().match(/^Bearer\s+(.+)$/i)?.[1];
+    if (!bearer || !safeEq(bearer, config.adminKey)) return res.status(401).json({ error: 'admin: invalid token' });
+    return next();
+});
+
 const wrapA = (fn: (q: express.Request, r: express.Response) => Promise<unknown>) =>
     async (q: express.Request, r: express.Response) => {
         try { await fn(q, r); }
@@ -83,9 +97,11 @@ adminApp.delete('/admin/api/sessions/:id', wrapA(async (q, r) => {
 }));
 // Serve the admin static UI on the same private socket (so an SSH tunnel
 // against :8610 gets both the admin REST + the admin dashboard).
-adminApp.get('/admin', (_req, res) => res.sendFile(path.join(webDir, 'admin.html')));
-adminApp.get('/admin/', (_req, res) => res.sendFile(path.join(webDir, 'admin.html')));
-adminApp.use(express.static(webDir));
+adminApp.get('/', (_req, res) => res.redirect('/admin/'));
+adminApp.get('/admin', (_req, res) => res.sendFile(path.join(webDir, 'admin', 'index.html')));
+adminApp.get('/admin/', (_req, res) => res.sendFile(path.join(webDir, 'admin', 'index.html')));
+adminApp.use('/admin', express.static(path.join(webDir, 'admin')));
+adminApp.use('/shared', express.static(path.join(webDir, 'shared')));
 
 // ── CDP proxy server (internal only) ──────────────────────────────────────────
 

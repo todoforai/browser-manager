@@ -47,6 +47,7 @@ export interface ServerConfig {
     adminPort: number;      // Admin REST (cross-user dashboard) — bound to 127.0.0.1, nginx blocks /admin/
     cdpPort: number;        // CDP WebSocket proxy port
     noisePort: number;
+    adminKey: string;       // Shared bearer for /admin/api/* (BROWSER_MANAGER_ADMIN_KEY). Empty → admin disabled.
     host: string;
     cors: { origins: string[] };
 }

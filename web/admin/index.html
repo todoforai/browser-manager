@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Browser Admin · TODO for AI</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../shared/theme.css">
+<style>
+  .stats { display: flex; gap: 12px; margin-bottom: 18px; flex-wrap: wrap; }
+  .stat  { background: var(--surface-2, #161616); border: 1px solid var(--border, #2a2a2a); padding: 10px 14px; border-radius: 6px; min-width: 120px; }
+  .stat .v { font-size: 22px; font-weight: 600; }
+  .stat .l { color: var(--muted, #888); font-size: 12px; }
+  table { width: 100%; border-collapse: collapse; background: var(--surface-2, #161616); border-radius: 6px; overflow: hidden; }
+  th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--border, #2a2a2a); font-size: 13px; }
+  th { background: #1c1c1c; color: var(--muted, #aaa); font-weight: 500; }
+  tr:hover { background: #1d1d1d; }
+  .id { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #8af; }
+  .url { color: #aaa; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; text-transform: uppercase; }
+  .badge.active     { background: #1d4; color: #000; }
+  .badge.idle       { background: #fa3; color: #000; }
+  .badge.hibernated { background: #555; color: #fff; }
+  td.actions button { background: #2a2a2a; color: #eee; border: 1px solid #444; padding: 4px 8px; margin-right: 4px; border-radius: 3px; cursor: pointer; font-size: 12px; }
+  td.actions button:hover { background: #333; }
+  td.actions button.danger:hover { background: #c33; border-color: #c33; }
+  .err { color: #f66; padding: 12px; }
+  .placeholder { display: flex; flex-direction: column; align-items: center; padding: 64px 0; color: var(--muted, #888); }
+  .userbar { color: var(--muted, #aaa); font-size: 12px; margin-bottom: 8px; }
+  details.userblock { background: var(--surface-2, #161616); border: 1px solid var(--border, #2a2a2a); border-radius: 6px; margin-bottom: 10px; overflow: hidden; }
+  details.userblock > summary { cursor: pointer; padding: 10px 14px; background: #1c1c1c; user-select: none; list-style: none; }
+  details.userblock > summary::-webkit-details-marker { display: none; }
+  details.userblock > summary::before { content: '▸ '; color: var(--muted, #666); }
+  details.userblock[open] > summary::before { content: '▾ '; }
+  details.userblock > table { border-radius: 0; }
+  .muted { color: var(--muted, #888); font-weight: normal; }
+  .signin { max-width: 520px; margin: 64px auto; padding: 22px; background: var(--surface-2, #161616); border: 1px solid var(--border, #2a2a2a); border-radius: 8px; }
+  .signin input { width: 100%; box-sizing: border-box; padding: 8px 10px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 13px; background: #111; color: #eee; border: 1px solid #333; border-radius: 4px; }
+  .signin button { margin-top: 10px; padding: 8px 14px; background: #2a4; color: white; border: 0; border-radius: 4px; cursor: pointer; }
+</style>
+</head>
+<body>
+
+<header class="app-bar">
+  <div class="bar">
+    <a class="brand" href="/" aria-label="TODO for AI — Browser Admin">
+      <span class="dot"></span>
+      TODO <b>for</b> AI
+      <span class="crumbs" style="margin-left:8px"><span class="sep">/</span> Browser <span class="sep">/</span> Admin</span>
+    </a>
+    <div></div>
+    <button id="refresh" style="background:#2a4;color:#fff;border:0;padding:6px 12px;border-radius:4px;cursor:pointer">Refresh</button>
+  </div>
+</header>
+
+<main class="app-main" id="app">
+  <div class="placeholder"><span class="spinner"></span><p style="margin-top:14px">Loading…</p></div>
+</main>
+
+<footer class="app-footer">
+  Browser Manager · <a href="https://todofor.ai" target="_blank" rel="noopener noreferrer">todofor.ai</a>
+</footer>
+
+<script type="module">
+import { makeAuth, el, fmtAge } from '../shared/auth.js';
+
+const { api, getToken, setToken } = makeAuth('browser_admin');
+
+const state = { needsKey: !getToken(), stats: null, sessions: [], hibernated: [], err: null };
+
+async function loadAll() {
+  try {
+    const [sessions, hibernated, stats] = await Promise.all([
+      api('/admin/api/sessions'),
+      api('/admin/api/sessions/hibernated').catch(() => []),
+      api('/admin/api/stats').catch(() => null),
+    ]);
+    state.sessions   = sessions || [];
+    state.hibernated = hibernated || [];
+    state.stats      = stats;
+    state.err = null;
+    state.needsKey = false;
+  } catch (e) {
+    if (e.unauth) { state.needsKey = true; render(); return; }
+    state.err = e.message;
+  }
+  render();
+}
+
+function renderSignIn() {
+  const root = document.getElementById('app');
+  root.innerHTML = '';
+  const form = el('form', { class: 'signin', onsubmit: (ev) => {
+    ev.preventDefault();
+    const v = form.querySelector('input').value.trim();
+    if (!v) return;
+    setToken(v);
+    state.needsKey = false;
+    loadAll();
+  }},
+    el('h2', { style: 'margin-top:0' }, 'Admin sign-in'),
+    el('p', { style: 'color:#aaa; font-size:13px' },
+      'Paste the value of ', el('code', {}, 'BROWSER_MANAGER_ADMIN_KEY'),
+      '. The admin socket is bound to 127.0.0.1 in prod — reach it via SSH tunnel.'),
+    el('input', { type: 'password', placeholder: 'admin key', autofocus: true }),
+    el('button', { type: 'submit' }, 'Continue'),
+  );
+  root.appendChild(form);
+}
+
+function escapeHtml(s) { return (s || '').replace(/[<>&]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c])); }
+
+function rowFor(s) {
+  const vp = `${s.viewport.width}×${s.viewport.height}`;
+  const isHib = s._kind === 'hibernated';
+  const actBtns = isHib
+    ? `<button data-act="restore" data-id="${s.sessionId}">Restore</button>
+       <button class="danger" data-act="delete" data-id="${s.sessionId}">Delete</button>`
+    : `${s.status !== 'hibernated' ? `<button data-act="hibernate" data-id="${s.sessionId}">Hibernate</button>` : ''}
+       <button class="danger" data-act="delete" data-id="${s.sessionId}">Delete</button>`;
+  return `<tr>
+    <td class="id" title="${s.sessionId}">${s.sessionId.slice(0, 8)}…</td>
+    <td>${escapeHtml(s.title) || '<span class="muted">(no title)</span>'}</td>
+    <td class="url" title="${(s.url || '').replace(/"/g, '&quot;')}">${s.url || '—'}</td>
+    <td><span class="badge ${s.status}">${s.status}</span></td>
+    <td>${vp}</td>
+    <td>${s.connections}</td>
+    <td>${fmtAge(s.createdAt)}</td>
+    <td>${fmtAge(s.lastActiveAt)}</td>
+    <td class="actions">${actBtns}</td>
+  </tr>`;
+}
+
+function render() {
+  if (state.needsKey) return renderSignIn();
+  const root = document.getElementById('app');
+  root.innerHTML = '';
+
+  if (state.err) {
+    root.appendChild(el('div', { class: 'err' }, `Error: ${state.err}`));
+  }
+
+  if (state.stats) {
+    const s = state.stats;
+    const stats = el('div', { class: 'stats' },
+      el('div', { class: 'stat' }, el('div', { class: 'v' }, String(s.total)),      el('div', { class: 'l' }, 'total')),
+      el('div', { class: 'stat' }, el('div', { class: 'v' }, String(s.active)),     el('div', { class: 'l' }, 'active')),
+      el('div', { class: 'stat' }, el('div', { class: 'v' }, String(s.idle)),       el('div', { class: 'l' }, 'idle')),
+      el('div', { class: 'stat' }, el('div', { class: 'v' }, String(s.hibernated)), el('div', { class: 'l' }, 'hibernated')),
+      el('div', { class: 'stat' }, el('div', { class: 'v' }, String(s.users)),      el('div', { class: 'l' }, 'users')),
+      el('div', { class: 'stat' }, el('div', { class: 'v' }, `${s.memory_mb} MB`),  el('div', { class: 'l' }, 'RSS')),
+    );
+    root.appendChild(stats);
+  }
+
+  const all = [
+    ...state.sessions.map(s => ({ ...s, _kind: 'live' })),
+    ...state.hibernated.map(h => ({
+      sessionId: h.sessionId, userId: h.userId, status: 'hibernated',
+      url: h.url, title: h.title, viewport: h.viewport,
+      connections: 0, createdAt: h.createdAt, lastActiveAt: h.hibernatedAt,
+      _kind: 'hibernated',
+    })),
+  ];
+
+  if (!all.length) {
+    root.appendChild(el('div', { class: 'placeholder' }, el('p', {}, 'No browser sessions.')));
+    return;
+  }
+
+  const headRow = `<tr>
+    <th>ID</th><th>Title</th><th>URL</th><th>State</th><th>Viewport</th>
+    <th>Conn</th><th>Age</th><th>Idle/Hib</th><th>Actions</th>
+  </tr>`;
+
+  const groups = all.reduce((m, s) => ((m[s.userId] ||= []).push(s), m), {});
+  const users  = Object.keys(groups).sort();
+
+  root.insertAdjacentHTML('beforeend',
+    `<div class="userbar">${users.length} user${users.length === 1 ? '' : 's'} · ${all.length} session${all.length === 1 ? '' : 's'}</div>` +
+    users.map(u => {
+      const items   = groups[u];
+      const active  = items.filter(s => s.status === 'active').length;
+      const idle    = items.filter(s => s.status === 'idle').length;
+      const hib     = items.filter(s => s.status === 'hibernated').length;
+      return `<details open class="userblock">
+        <summary><b>${escapeHtml(u)}</b> <span class="muted">— ${items.length} total · ${active} active · ${idle} idle · ${hib} hibernated</span></summary>
+        <table><thead>${headRow}</thead><tbody>${items.map(rowFor).join('')}</tbody></table>
+      </details>`;
+    }).join('')
+  );
+}
+
+document.addEventListener('click', async e => {
+  const btn = e.target.closest('button[data-act]');
+  if (!btn) return;
+  const { act, id } = btn.dataset;
+  if (act === 'delete' && !confirm('Delete browser session ' + id.slice(0, 8) + '…?')) return;
+  btn.disabled = true;
+  try {
+    if (act === 'hibernate') await api(`/admin/api/sessions/${id}/hibernate`, { method: 'POST' });
+    if (act === 'restore')   await api(`/admin/api/sessions/${id}/restore`,   { method: 'POST' });
+    if (act === 'delete')    await api(`/admin/api/sessions/${id}`,           { method: 'DELETE' });
+    await loadAll();
+  } catch (err) {
+    alert(err.message);
+    btn.disabled = false;
+  }
+});
+
+document.getElementById('refresh').addEventListener('click', loadAll);
+loadAll();
+setInterval(loadAll, 10000);
+</script>
+</body>
+</html>

@@ -7,6 +7,7 @@ export function getConfig(): ServerConfig {
         adminPort: parseInt(process.env.BROWSER_MANAGER_ADMIN_PORT || '8610'),
         cdpPort:   parseInt(process.env.BROWSER_MANAGER_CDP_PORT   || '8620'),
         noisePort: parseInt(process.env.BROWSER_MANAGER_NOISE_PORT || '8630'),
+        adminKey:  process.env.BROWSER_MANAGER_ADMIN_KEY?.trim() || '',
         host: '0.0.0.0',
         cors: {
             origins: isDev
