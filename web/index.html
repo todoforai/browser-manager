@@ -85,7 +85,7 @@
 </footer>
 
 <script type="module">
-import { makeAuth, el, $, fmtAge, renderSignIn, renderUserChip } from './shared/auth.js';
+import { makeAuth, el, $, fmtAge, renderSignIn, renderUserChip, code, renderAgentGuide } from './shared/auth.js';
 
 const { api, signOut } = makeAuth('browser');
 
@@ -218,7 +218,102 @@ function render() {
     root.appendChild(list);
   }
 
+  root.appendChild(renderBrowserGuide());
+
   if (state.showCreate) root.appendChild(renderCreateModal());
+}
+
+const ORIGIN = location.origin;
+const HOST = location.host;
+function sampleSid() {
+  const s = state.sessions[0] || state.hibernated[0];
+  return s ? (s.id || s.sessionId) : 'sess-<id>';
+}
+function renderBrowserGuide() {
+  const sid = sampleSid();
+  return renderAgentGuide({
+    subtitle: 'This panel is a thin client over a small REST + CDP-proxy API. Your AI agent can drive real browsers via Playwright, Puppeteer, the agent-browser CLI, or raw CDP.',
+    state, rerender: render,
+    tabs: [
+      { key: 'cli', label: 'agent-browser CLI', render: () => [
+        el('p', {}, 'The ', el('code', {}, 'agent-browser'),
+          ' CLI is a single binary that drives any CDP endpoint — including the sessions managed here. ',
+          'Authenticate with the same API key as this panel.'),
+        el('h3', {}, 'Install'),
+        code('bash', `# Linux / macOS (single binary, no deps)
+curl -fsSL https://${HOST}/cli/install.sh | sh
+agent-browser --version`),
+        el('h3', {}, 'Drive a session'),
+        code('bash', `agent-browser open    https://example.com --session ${sid}
+agent-browser snapshot                       --session ${sid}
+agent-browser click   "Sign in"              --session ${sid}
+agent-browser type    'input[name=q]' hello  --session ${sid}
+agent-browser screenshot out.png             --session ${sid}`),
+        el('p', {}, 'Without ', el('code', {}, '--session'),
+          ' the CLI spins up an ephemeral local browser. Pass an existing id to reuse server-side sessions and survive across runs.'),
+      ]},
+      { key: 'curl', label: 'REST · curl', render: () => [
+        el('p', {}, 'Every action this panel takes is a plain REST call. Authenticate with ',
+          el('code', {}, 'Authorization: Bearer <api-key>'), ' — generate one at ',
+          el('a', { href: 'https://todofor.ai/account/api-keys', target: '_blank', rel: 'noopener noreferrer', style: 'color:var(--primary)' }, 'todofor.ai/account/api-keys'),
+          '.'),
+        el('h3', {}, 'List sessions'),
+        code('bash', `curl -s ${ORIGIN}/api/sessions \\
+  -H "Authorization: Bearer $TODOFORAI_API_KEY" | jq`),
+        el('h3', {}, 'Create one'),
+        code('bash', `curl -s -X POST ${ORIGIN}/api/sessions \\
+  -H "Authorization: Bearer $TODOFORAI_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{"viewport":{"width":1280,"height":720}}' | jq`),
+        el('h3', {}, 'Hibernate / restore / delete'),
+        code('bash', `curl -X POST   ${ORIGIN}/api/sessions/${sid}/hibernate -H "Authorization: Bearer $TODOFORAI_API_KEY"
+curl -X POST   ${ORIGIN}/api/sessions/${sid}/restore   -H "Authorization: Bearer $TODOFORAI_API_KEY"
+curl -X DELETE ${ORIGIN}/api/sessions/${sid}           -H "Authorization: Bearer $TODOFORAI_API_KEY"`),
+      ]},
+      { key: 'cdp', label: 'Playwright / CDP', render: () => [
+        el('p', {}, 'Each session exposes a Chrome DevTools Protocol endpoint at ',
+          el('code', {}, '/cdp/<sessionId>'), '. Connect any CDP client — Playwright, Puppeteer, ',
+          el('code', {}, 'chrome-remote-interface'), ' — by pointing it at this URL.'),
+        el('h3', {}, 'Playwright (Node)'),
+        code('javascript', `import { chromium } from 'playwright';
+
+const browser = await chromium.connectOverCDP(
+  '${ORIGIN.replace(/^http/, 'ws')}/cdp/${sid}',
+  { headers: { Authorization: 'Bearer ' + process.env.TODOFORAI_API_KEY } },
+);
+const page = await browser.newPage();
+await page.goto('https://example.com');
+console.log(await page.title());`),
+        el('h3', {}, 'Puppeteer'),
+        code('javascript', `import puppeteer from 'puppeteer';
+
+const browser = await puppeteer.connect({
+  browserWSEndpoint: '${ORIGIN.replace(/^http/, 'ws')}/cdp/${sid}?token=' + process.env.TODOFORAI_API_KEY,
+});`),
+      ]},
+      { key: 'prompt', label: 'LLM prompt', render: () => [
+        el('p', {}, 'Hand this paragraph to any tool-using LLM and it can drive browsers for you.'),
+        el('h3', {}, 'Drop-in system prompt'),
+        code('text', `You have access to a browser-session manager at ${ORIGIN}.
+Authenticate every request with the header
+  Authorization: Bearer <TODOFORAI_API_KEY>
+
+Endpoints (JSON):
+  GET    /api/sessions                       list active sessions
+  GET    /api/sessions/hibernated            list hibernated sessions
+  POST   /api/sessions                       create. body: {"viewport":{"width":1280,"height":720}}
+  POST   /api/sessions/<id>/hibernate        snapshot + free RAM
+  POST   /api/sessions/<id>/restore          re-attach a hibernated session
+  DELETE /api/sessions/<id>                  terminate
+
+CDP endpoint per session: ws://${HOST}/cdp/<id>  (Playwright connectOverCDP / Puppeteer connect).
+
+Conventions:
+  - Reuse an existing session before creating a new one.
+  - Hibernate idle sessions instead of deleting them — restore is fast.`),
+      ]},
+    ],
+  });
 }
 
 function stat(label, value) {
