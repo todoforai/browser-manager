@@ -52,8 +52,8 @@ const httpServer = createServer(app);
 
 // ── Admin server (cross-user dashboard) ──────────────────────────────────────
 // Bound to 127.0.0.1:<adminPort> via startAdminServer (two-socket pattern,
-// see packages/shared-web/README.md). Reachability is the gate — nginx 404s
-// /admin/ on the public vhost as defense-in-depth.
+// see packages/shared-web/README.md). Loopback is the primary gate; the
+// bearer middleware below + nginx `/admin/` 404 are defense-in-depth.
 
 const adminApp = express();
 adminApp.use(express.json());

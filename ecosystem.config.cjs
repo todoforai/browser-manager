@@ -37,34 +37,46 @@ const envFromDisk = {
   ...loadEnvFile(path.join(sharedDir, 'noise.env')),
 };
 
-module.exports = {
-  apps: [
-    {
-      name: `browser-manager-${port}`,
-      script: 'node_modules/.bin/tsx',
-      args: 'server.ts',
-      cwd: __dirname,
-      instances: 1,
-      exec_mode: 'fork',
-      max_memory_restart: '2G',
-      exp_backoff_restart_delay: 100,
-      kill_timeout: 10000,
-      watch: false,
-      time: true,
-      merge_logs: true,
-      ...(logDir && {
-        error_file: `${logDir}/browser-manager-err.log`,
-        out_file: `${logDir}/browser-manager-out.log`,
-      }),
-      log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
-      env: {
-        ...envFromDisk,
-        NODE_ENV: 'production',
-        BROWSER_MANAGER_PORT: port,
-        BROWSER_MANAGER_ADMIN_PORT: adminPort,
-        BROWSER_MANAGER_CDP_PORT: cdpPort,
-        BROWSER_MANAGER_NOISE_PORT: noisePort,
-      },
-    },
-  ],
+// REST app — Chromium-on-demand. Binds REST + admin + CDP + Noise sockets.
+// Dev uses bun --watch (single PID PM2 can signal cleanly — tsx --watch
+// forks a child PM2 can't track, wedging the process on restart).
+const restApp = {
+  name: `browser-manager-${port}`,
+  script: 'server.ts',
+  interpreter: 'bun',
+  interpreter_args: isProd ? undefined : '--watch',
+  cwd: __dirname,
+  instances: 1,
+  exec_mode: 'fork',
+  max_memory_restart: '2G',
+  exp_backoff_restart_delay: 100,
+  kill_timeout: 10000,
+  watch: false,
+  time: true,
+  merge_logs: true,
+  ...(logDir && {
+    error_file: `${logDir}/browser-manager-err.log`,
+    out_file: `${logDir}/browser-manager-out.log`,
+  }),
+  log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
+  env: {
+    ...envFromDisk,
+    NODE_ENV: isProd ? 'production' : 'development',
+    BROWSER_MANAGER_PORT: port,
+    BROWSER_MANAGER_ADMIN_PORT: adminPort,
+    BROWSER_MANAGER_CDP_PORT: cdpPort,
+    BROWSER_MANAGER_NOISE_PORT: noisePort,
+  },
 };
+
+// Dev-only web sidecar: serves web/ on 8650 (user) + 8680 (admin).
+// In prod, nginx serves dist/ directly — no PM2 entry needed.
+const webApp = !isProd && {
+  name: 'browser-manager-web',
+  script: 'web/dev-server.js',
+  interpreter: 'bun',
+  cwd: __dirname,
+  max_memory_restart: '256M',
+};
+
+module.exports = { apps: [restApp, webApp].filter(Boolean) };
