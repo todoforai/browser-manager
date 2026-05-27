@@ -85,9 +85,9 @@
 </footer>
 
 <script type="module">
-import { makeAuth, el, $, fmtAge, renderSignIn } from './shared/auth.js';
+import { makeAuth, el, $, fmtAge, renderSignIn, renderUserChip } from './shared/auth.js';
 
-const { api, setToken } = makeAuth('browser');
+const { api, signOut } = makeAuth('browser');
 
 const VIEWPORTS = [
   { l: 'Desktop',     w: 1280, h: 720 },
@@ -161,9 +161,7 @@ function render() {
   $('#user-chip').innerHTML = '';
 
   if (state.authed === false) {
-    root.appendChild(renderSignIn({
-      onUseToken: t => { setToken(t); state.authed = null; render(); loadAll(); },
-    }));
+    root.appendChild(renderSignIn());
     return;
   }
   if (state.authed === null) {
@@ -175,12 +173,10 @@ function render() {
   }
 
   const n = state.sessions.length;
-  $('#user-chip').appendChild(
-    el('span', { class: 'user-chip' },
-      el('span', { class: 'dot' }),
-      `${n} session${n === 1 ? '' : 's'}`,
-    ),
-  );
+  $('#user-chip').appendChild(renderUserChip({
+    label: `${n} session${n === 1 ? '' : 's'}`,
+    signOut,
+  }));
 
   root.appendChild(
     el('div', { class: 'page-head' },
