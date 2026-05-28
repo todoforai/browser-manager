@@ -18,10 +18,10 @@
     "express": "^4.18.2",
     "playwright": "^1.58.0",
     "@todoforai/noise": "file:../noise-ts",
+    "@shared/web": "file:./vendor/shared-web",
     "ws": "^8.18.0"
   },
   "devDependencies": {
-    "@shared/web": "file:../packages/shared-web",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/node": "^24.0.0",

@@ -1,0 +1,23 @@
+{
+  "name": "@shared/web",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Vanilla browser CSS + ES modules shared by *-manager static web UIs (sandbox/storage/browser). Served directly to the browser — no bundler.",
+  "exports": {
+    "./theme.css": "./theme.css",
+    "./auth.js": "./auth.js",
+    "./dev-server.js": "./dev-server.js",
+    "./server-helpers": {
+      "types": "./server-helpers.d.ts",
+      "default": "./server-helpers.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "theme.css",
+    "auth.js",
+    "dev-server.js",
+    "server-helpers.js",
+    "server-helpers.d.ts"
+  ]
+}

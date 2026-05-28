@@ -1,9 +1,11 @@
 {
   "lockfileVersion": 1,
+  "configVersion": 0,
   "workspaces": {
     "": {
       "name": "browser-manager",
       "dependencies": {
+        "@shared/web": "file:./vendor/shared-web",
         "@todoforai/noise": "file:../noise-ts",
         "cors": "^2.8.5",
         "dotenv": "^16.3.1",
@@ -12,7 +14,6 @@
         "ws": "^8.18.0",
       },
       "devDependencies": {
-        "@shared/web": "file:../packages/shared-web",
         "@types/cors": "^2.8.19",
         "@types/express": "^5.0.6",
         "@types/node": "^24.0.0",
@@ -75,7 +76,7 @@
 
     "@esbuild/win32-x64": ["@esbuild/win32-x64@0.27.5", "", { "os": "win32", "cpu": "x64" }, "sha512-PWypQR+d4FLfkhBIV+/kHsUELAnMpx1bRvvsn3p+/sAERbnCzFrtDRG2Xw5n+2zPxBK2+iaP+vetsRl4Ti7WgA=="],
 
-    "@shared/web": ["@shared/web@file:../packages/shared-web", {}],
+    "@shared/web": ["@shared/web@file:vendor/shared-web", {}],
 
     "@todoforai/noise": ["@todoforai/noise@file:../noise-ts", { "devDependencies": { "tsx": "^4.19.2", "typescript": "^5.7.3" } }],
 
