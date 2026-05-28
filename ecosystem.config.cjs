@@ -1,6 +1,20 @@
 const fs = require('fs');
 const path = require('path');
 
+// Resolve bun absolute path — PM2's daemon PATH on prod hosts often
+// lacks ~/.bun/bin, so an `interpreter: 'bun'` literal can ENOENT.
+function resolveBun() {
+  const candidates = [
+    process.env.BUN_BIN,
+    `${process.env.HOME || '/root'}/.bun/bin/bun`,
+    '/root/.bun/bin/bun',
+    '/usr/local/bin/bun',
+  ].filter(Boolean);
+  for (const c of candidates) if (fs.existsSync(c)) return c;
+  return 'bun'; // last-ditch; rely on PATH (dev machines)
+}
+const BUN = resolveBun();
+
 // Parse a KEY=VALUE env file into an object. Mirrors sandbox-manager/ecosystem.config.js
 // so PM2 picks up shared .env without needing a separate loader.
 function loadEnvFile(p) {
@@ -43,7 +57,7 @@ const envFromDisk = {
 const restApp = {
   name: `browser-manager-${port}`,
   script: 'server.ts',
-  interpreter: 'bun',
+  interpreter: BUN,
   interpreter_args: isProd ? undefined : '--watch',
   cwd: __dirname,
   instances: 1,
@@ -74,7 +88,7 @@ const restApp = {
 const webApp = !isProd && {
   name: 'browser-manager-web',
   script: 'web/dev-server.js',
-  interpreter: 'bun',
+  interpreter: BUN,
   cwd: __dirname,
   max_memory_restart: '256M',
 };
