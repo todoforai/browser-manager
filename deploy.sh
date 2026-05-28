@@ -98,8 +98,12 @@ deploy() {
         NGINX_CONF=/etc/nginx/sites-available/bm.todofor.ai
         STREAM_CONF=/etc/nginx/streams-available/bm-noise-stream.conf
 
+        # NODE_ENV must be in the shell env (not just --env production) because
+        # ecosystem.config.cjs reads process.env.NODE_ENV at load time to decide
+        # whether to include the dev-only web sidecar. --env production only
+        # selects env_production overrides after the config is evaluated.
         echo "Starting new instance on port \$NEW_PORT..."
-        DEPLOY_PORT=\$NEW_PORT pm2 start ecosystem.config.cjs --env production
+        NODE_ENV=production DEPLOY_PORT=\$NEW_PORT pm2 start ecosystem.config.cjs --env production
         pm2 save --force
 
         # Wait for new instance to be healthy before touching nginx
@@ -191,7 +195,7 @@ rollback() {
 
         # Start rollback on the inactive port first
         cd $DEPLOY_PATH/current
-        DEPLOY_PORT=$ROLLBACK_PORT pm2 start ecosystem.config.cjs --env production
+        NODE_ENV=production DEPLOY_PORT=$ROLLBACK_PORT pm2 start ecosystem.config.cjs --env production
         pm2 save --force
 
         # Wait healthy before touching nginx
