@@ -54,7 +54,7 @@ static void send_rpc(const char *type, const char *payload_json) {
         snprintf(backend_addr, sizeof(backend_addr), "%s:%s",
                  bh ? bh : LOGIN_DEFAULT_BACKEND_HOST,
                  bp ? bp : LOGIN_DEFAULT_NOISE_PORT);
-        if (login_device_flow(backend_addr, "browser", NULL) != 0) exit(1);
+        if (login_device_flow(backend_addr, "browser", NULL, NULL) != 0) exit(1);
         if (login_load_credentials(&creds) < 0 || !creds.api_key[0])
             fatal("login completed but no credentials saved");
     }
@@ -115,7 +115,7 @@ static void cmd_login(int argc, char **argv) {
     snprintf(addr, sizeof(addr), "%s:%s",
              bh ? bh : LOGIN_DEFAULT_BACKEND_HOST,
              bp ? bp : LOGIN_DEFAULT_NOISE_PORT);
-    if (login_device_flow(addr, "browser", NULL) != 0) exit(1);
+    if (login_device_flow(addr, "browser", NULL, NULL) != 0) exit(1);
 }
 
 static void cmd_whoami(void) { if (login_print_whoami("browser") != 0) exit(1); }
