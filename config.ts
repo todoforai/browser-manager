@@ -12,7 +12,7 @@ export function getConfig(): ServerConfig {
         cors: {
             origins: isDev
                 ? ['http://localhost:3000', 'http://localhost:8600', 'http://localhost:8620']
-                : ['https://todofor.ai', 'https://bm.todofor.ai'],
+                : ['https://todofor.ai', 'https://bm.todofor.ai', 'https://browser.todofor.ai'],
         },
     };
 }

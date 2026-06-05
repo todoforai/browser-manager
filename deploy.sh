@@ -279,8 +279,10 @@ ENVEOF
 
         mkdir -p /var/lib/browser-manager/hibernate
 
-        echo "Done. Next: obtain TLS cert:"
-        echo "  certbot --nginx -d bm.todofor.ai"
+        echo "Done. Next: obtain a SAN TLS cert covering both names so the"
+        echo "consolidated browser.todofor.ai/bm/ surface and the bm.todofor.ai"
+        echo "compat alias share one lineage:"
+        echo "  certbot --nginx -d browser.todofor.ai -d bm.todofor.ai"
 EOF
     log "Server setup complete!"
 }
