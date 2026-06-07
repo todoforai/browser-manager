@@ -88,12 +88,7 @@
 <script type="module">
 import { makeAuth, el, $, fmtAge, renderSignIn, renderUserChip, code, renderAgentGuide } from './shared/auth.js';
 
-// Base path: '' when served at the host root (bm.todofor.ai/), '/bm' when
-// served under the consolidated browser.todofor.ai/bm/ surface. Lets the same
-// panel work on both hosts during the bm → browser migration.
-const BASE = location.pathname.startsWith('/bm/') || location.pathname === '/bm' ? '/bm' : '';
-const { api: rawApi, signOut } = makeAuth('browser');
-const api = (path, opts) => rawApi(path.startsWith('/') ? BASE + path : path, opts);
+const { api, signOut } = makeAuth('browser');
 
 const VIEWPORTS = [
   { l: 'Desktop',     w: 1280, h: 720 },
@@ -229,8 +224,8 @@ function render() {
   if (state.showCreate) root.appendChild(renderCreateModal());
 }
 
-const ORIGIN = location.origin + BASE;
-const HOST = location.host + BASE;
+const ORIGIN = location.origin;
+const HOST = location.host;
 function sampleSid() {
   const s = state.sessions[0] || state.hibernated[0];
   return s ? (s.id || s.sessionId) : 'sess-<id>';
