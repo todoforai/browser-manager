@@ -27,6 +27,7 @@ export interface SessionInfo {
     connections: number;
     url?: string;
     title?: string;
+    cdpUrl: string;   // Reconnect endpoint: <CDP_PUBLIC_URL>/cdp/<sessionId>
 }
 
 /** Internal live session state */

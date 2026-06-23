@@ -43,10 +43,12 @@ static void resolve_browser_addr(char *addr_buf, size_t cap,
     snprintf(addr_buf, cap, "%s:%s", host, port);
 }
 
-// Auto-login on first use, then send one RPC. Returns response on stdout.
-static void send_rpc(const char *type, const char *payload_json) {
+// Auto-login on first use, then send one RPC. Fills resp_out (NUL-terminated)
+// with the JSON response and returns its length (>=0). Exits on hard failure.
+static int send_rpc_capture(const char *type, const char *payload_json,
+                            char *resp_out, size_t resp_cap) {
     login_credentials_t creds;
-    if (login_load_credentials(&creds) < 0 || !creds.api_key[0]) {
+    if (login_load_credentials(&creds) < 0 || !creds.api_token[0]) {
         fprintf(stderr, "No credentials found. Starting login...\n\n");
         const char *bh = getenv("NOISE_BACKEND_HOST");
         const char *bp = getenv("NOISE_BACKEND_PORT");
@@ -55,7 +57,7 @@ static void send_rpc(const char *type, const char *payload_json) {
                  bh ? bh : LOGIN_DEFAULT_BACKEND_HOST,
                  bp ? bp : LOGIN_DEFAULT_NOISE_PORT);
         if (login_device_flow(backend_addr, "browser", NULL, NULL) != 0) exit(1);
-        if (login_load_credentials(&creds) < 0 || !creds.api_key[0])
+        if (login_load_credentials(&creds) < 0 || !creds.api_token[0])
             fatal("login completed but no credentials saved");
     }
 
@@ -70,17 +72,18 @@ static void send_rpc(const char *type, const char *payload_json) {
     char req[2048];
     int n = snprintf(req, sizeof(req),
         "{\"id\":\"%s\",\"type\":\"%s\",\"token\":\"%s\",\"payload\":%s}",
-        id_hex, type, creds.api_key, payload_json && *payload_json ? payload_json : "{}");
+        id_hex, type, creds.api_token, payload_json && *payload_json ? payload_json : "{}");
     if (n < 0 || (size_t)n >= sizeof(req)) fatal("request too large");
 
     // TOFU on first call after login; pin thereafter.
     char learned_pub[65] = {0};
-    char resp[8192];
     int rn = login_oneshot_rpc(addr,
                                creds.browser_pubkey[0] ? creds.browser_pubkey : NULL,
-                               req, (size_t)n, resp, sizeof(resp),
+                               req, (size_t)n, resp_out, resp_cap,
                                creds.browser_pubkey[0] ? NULL : learned_pub);
     if (rn < 0) exit(1);
+    if (rn >= (int)resp_cap) rn = (int)resp_cap - 1;
+    resp_out[rn] = '\0';
 
     // Persist newly-learned browser pubkey + host.
     if (!creds.browser_pubkey[0] && learned_pub[0]) {
@@ -95,8 +98,16 @@ static void send_rpc(const char *type, const char *payload_json) {
         (void)login_save_credentials(&upd);
     }
 
+    return rn;
+}
+
+// Send an RPC and print the raw JSON response (legacy behavior for most cmds).
+static void send_rpc(const char *type, const char *payload_json) {
+    char resp[8192];
+    send_rpc_capture(type, payload_json, resp, sizeof(resp));
     fputs(resp, stdout);
-    if (rn == 0 || resp[rn - 1] != '\n') putchar('\n');
+    size_t len = strlen(resp);
+    if (len == 0 || resp[len - 1] != '\n') putchar('\n');
 }
 
 // ── Subcommands ──────────────────────────────────────────────────────────────
@@ -178,6 +189,47 @@ static void cmd_create(int argc, char **argv) {
     send_rpc("browser.create", payload);
 }
 
+// browser connect <id> [--exec]
+// Resolves the session's CDP URL and prints (or runs) the agent-browser command.
+static void cmd_connect(int argc, char **argv) {
+    static const char *USAGE = "connect <id> [--exec]";
+    int do_exec = 0;
+    ko_longopt_t lo[] = {
+        { "help", ko_no_argument, 'h' },
+        { "exec", ko_no_argument, 'e' },
+        { 0, 0, 0 }
+    };
+    ketopt_t opt = KETOPT_INIT; int c;
+    while ((c = ketopt(&opt, argc, argv, 1, "he", lo)) >= 0) {
+        if (c == 'h') { cli_usage(stdout, "browser", USAGE); exit(0); }
+        if (c == 'e') { do_exec = 1; continue; }
+        cli_parse_error("browser", "connect", argc, argv, &opt, c);
+    }
+    if (opt.ind >= argc) cli_usage_error("browser", "connect", "missing <id>");
+    const char *id = argv[opt.ind++];
+    if (opt.ind != argc) cli_usage_error("browser", "connect", "unexpected argument");
+
+    char payload[256];
+    snprintf(payload, sizeof(payload), "{\"id\":\"%s\"}", id);
+    char resp[8192];
+    send_rpc_capture("browser.get", payload, resp, sizeof(resp));
+
+    char cdp_url[512] = {0};
+    if (!json_find_string(resp, "cdpUrl", cdp_url, sizeof(cdp_url)) || !cdp_url[0]) {
+        fputs(resp, stderr);
+        if (resp[0] && resp[strlen(resp) - 1] != '\n') fputc('\n', stderr);
+        fatal("no cdpUrl in response (session not found?)");
+    }
+
+    if (do_exec) {
+        char cmd[640];
+        snprintf(cmd, sizeof(cmd), "agent-browser connect '%s'", cdp_url);
+        int rc = system(cmd);
+        exit(rc == 0 ? 0 : 1);
+    }
+    printf("agent-browser connect '%s'\n", cdp_url);
+}
+
 static void usage(void) {
     printf("browser " BROWSER_VERSION " — TODO for AI browser CLI\n\n"
         "Usage: browser <command> [options]\n\n"
@@ -189,6 +241,7 @@ static void usage(void) {
         "  create [--width <px> --height <px>]\n"
         "  list\n"
         "  get <id>\n"
+        "  connect <id> [--exec]       print (or run) the agent-browser connect command\n"
         "  delete <id>\n"
         "  delete-all\n"
         "  hibernate <id>\n"
@@ -219,6 +272,7 @@ int main(int argc, char **argv) {
     else if (!strcmp(cmd, "create"))          cmd_create(sub_argc, sub_argv);
     else if (!strcmp(cmd, "list"))            cmd_simple("browser.list", sub_argc, sub_argv);
     else if (!strcmp(cmd, "get"))             cmd_with_id("browser.get", sub_argc, sub_argv);
+    else if (!strcmp(cmd, "connect"))         cmd_connect(sub_argc, sub_argv);
     else if (!strcmp(cmd, "delete"))          cmd_with_id("browser.delete", sub_argc, sub_argv);
     else if (!strcmp(cmd, "delete-all"))      cmd_simple("browser.delete_all", sub_argc, sub_argv);
     else if (!strcmp(cmd, "hibernate"))       cmd_with_id("browser.hibernate", sub_argc, sub_argv);

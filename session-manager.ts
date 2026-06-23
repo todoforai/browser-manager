@@ -51,9 +51,15 @@ async function pageState(s: BrowserSession): Promise<{ url?: string; title?: str
     } catch { return {}; }
 }
 
+// Public base for the CDP reconnect URL. Prod sets CDP_PUBLIC_URL to the
+// auth-proxied wss host; dev falls back to the local CDP proxy port.
+const CDP_PUBLIC_URL = (process.env.CDP_PUBLIC_URL
+    ?? `ws://localhost:${process.env.BROWSER_MANAGER_CDP_PORT || '8620'}`).replace(/\/$/, '');
+
 function toInfo(id: string, s: BrowserSession, extra: { url?: string; title?: string } = {}): SessionInfo {
     return { sessionId: id, userId: s.userId, status: s.status, createdAt: s.createdAt,
-             lastActiveAt: s.lastActiveAt, viewport: s.viewport, connections: s.connections, ...extra };
+             lastActiveAt: s.lastActiveAt, viewport: s.viewport, connections: s.connections,
+             cdpUrl: `${CDP_PUBLIC_URL}/cdp/${id}`, ...extra };
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
