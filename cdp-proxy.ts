@@ -16,6 +16,21 @@ import { WebSocket, WebSocketServer, type RawData } from 'ws';
 import type { Server } from 'http';
 import { getRawSession, touchSession, setConnections, restoreSession } from './session-manager.js';
 import { authorizeCdp } from './service.js';
+import type { Duplex } from 'stream';
+
+// Reject an upgrade with a complete HTTP response (Content-Length + Connection:
+// close) so the reverse proxy reads a full header instead of seeing a premature
+// close (which surfaces as a 502).
+function reject(socket: Duplex, code: number, text: string): void {
+    const body = `${code} ${text}`;
+    socket.end(
+        `HTTP/1.1 ${code} ${text}\r\n` +
+        `Content-Type: text/plain\r\n` +
+        `Content-Length: ${Buffer.byteLength(body)}\r\n` +
+        `Connection: close\r\n\r\n` +
+        body
+    );
+}
 
 export function attachCDPProxy(server: Server): void {
     const wss = new WebSocketServer({ noServer: true });
@@ -23,12 +38,11 @@ export function attachCDPProxy(server: Server): void {
     server.on('upgrade', async (req, socket, head) => {
         const url = new URL(req.url ?? '', 'http://localhost');
         const match = url.pathname.match(/^\/cdp\/([^/?]+)/);
-        if (!match) { socket.destroy(); return; }
+        if (!match) { reject(socket, 400, 'Bad Request'); return; }
         const sessionId = match[1];
 
         if (!(await authorizeCdp(sessionId, url.searchParams.get('token') ?? undefined))) {
-            socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-            socket.destroy();
+            reject(socket, 401, 'Unauthorized');
             return;
         }
 
