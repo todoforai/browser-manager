@@ -28,6 +28,12 @@ export const AUTH_FORBIDDEN  = 'forbidden';
 // TODOforAI backend uses it for ops on behalf of a user (must specify actAs).
 const adminKey = process.env.BROWSER_MANAGER_ADMIN_KEY?.trim();
 
+// Constant-time string compare to avoid leaking the admin key via timing.
+function safeEq(a: string, b: string): boolean {
+    const ab = Buffer.from(a), bb = Buffer.from(b);
+    return ab.length === bb.length && crypto.timingSafeEqual(ab, bb);
+}
+
 // Where to verify per-user CLI/agent tokens. Local dev → local backend, prod → public API.
 // Mirrors the NODE_ENV split used in config.ts for CORS.
 const TODOFORAI_API = process.env.NODE_ENV === 'production'
@@ -95,7 +101,7 @@ export function requestToken(headers?: { authorization?: string | undefined; 'x-
 export async function authenticate(token: string | undefined, actAs?: string): Promise<{ userId: string; isAdmin: boolean }> {
     const t = token?.trim();
     if (!t) throw new Error(AUTH_INVALID);
-    if (adminKey && t === adminKey) {
+    if (adminKey && safeEq(t, adminKey)) {
         if (!actAs) throw new Error(AUTH_MISSING_AS);
         return { userId: actAs, isAdmin: true };
     }
@@ -125,20 +131,32 @@ export function health() {
     };
 }
 
+// When CDP auth is enforced, agent-browser must present the caller's token on
+// the WS upgrade. Embed it in the returned cdpUrl so `browser connect` works
+// out of the box. No-op in dev/internal mode (open proxy). Never embeds the
+// server admin key — that's a server-to-server secret, not a browser credential;
+// admin callers get a token-less URL and must inject the end-user's token.
+function withCdpToken<T extends SessionInfo | null>(info: T, token?: string): T {
+    if (!info || process.env.CDP_REQUIRE_AUTH !== 'true') return info;
+    if (!token || (adminKey && token === adminKey)) return info;
+    const sep = info.cdpUrl.includes('?') ? '&' : '?';
+    return { ...info, cdpUrl: `${info.cdpUrl}${sep}token=${encodeURIComponent(token)}` };
+}
+
 export async function createSession(input: CreateSessionInput, token?: string, actAs?: string): Promise<SessionInfo> {
     const { userId } = await authenticate(token, actAs);
-    return createBrowserSession(crypto.randomUUID(), { userId, viewport: input.viewport });
+    return withCdpToken(await createBrowserSession(crypto.randomUUID(), { userId, viewport: input.viewport }), token);
 }
 
 export async function getSession(sessionId: string, token?: string, actAs?: string): Promise<SessionInfo | null> {
     const caller = await authenticate(token, actAs);
     await requireOwner(sessionId, caller);
-    return getBrowserSession(sessionId);
+    return withCdpToken(await getBrowserSession(sessionId), token);
 }
 
 export async function listSessions(token?: string, actAs?: string): Promise<SessionInfo[]> {
     const { userId } = await authenticate(token, actAs);
-    return listBrowserSessions(userId);
+    return (await listBrowserSessions(userId)).map(s => withCdpToken(s, token));
 }
 
 export async function deleteSession(sessionId: string, token?: string, actAs?: string): Promise<void> {
@@ -161,12 +179,31 @@ export async function hibernateSession(sessionId: string, token?: string, actAs?
 export async function restoreSession(sessionId: string, token?: string, actAs?: string): Promise<SessionInfo | null> {
     const caller = await authenticate(token, actAs);
     await requireOwner(sessionId, caller);
-    return restoreBrowserSession(sessionId);
+    return withCdpToken(await restoreBrowserSession(sessionId), token);
 }
 
 export async function listHibernated(token?: string, actAs?: string): Promise<HibernatedSession[]> {
     const { userId } = await authenticate(token, actAs);
     return listBrowserHibernated(userId);
+}
+
+/**
+ * Authorize a CDP WebSocket upgrade for a session.
+ * Returns true if the caller's token resolves and they own the session.
+ * Enforced only when CDP_REQUIRE_AUTH is set (prod) — internal/dev deploys
+ * keep the proxy open so the backend can relay without a user token.
+ */
+export async function authorizeCdp(sessionId: string, token: string | undefined): Promise<boolean> {
+    if (process.env.CDP_REQUIRE_AUTH !== 'true') return true;
+    // Unknown session → reject before upgrade (don't leak existence; don't let
+    // arbitrary valid tokens reach the connect/restore path for guessed IDs).
+    const owner = getRawSession(sessionId)?.userId ?? (await getHibernated(sessionId))?.userId;
+    if (owner === undefined) return false;
+    let caller: { userId: string; isAdmin: boolean };
+    // Admin key has no actAs on a WS upgrade — derive it from the session owner.
+    try { caller = await authenticate(token, owner); }
+    catch { return false; }
+    return caller.isAdmin || owner === caller.userId;
 }
 
 // ── Admin-only (cross-user) views ────────────────────────────────────────────

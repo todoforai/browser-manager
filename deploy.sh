@@ -128,10 +128,16 @@ deploy() {
             echo 'stream { include /etc/nginx/streams-enabled/*.conf; }' >> /etc/nginx/nginx.conf
         fi
 
-        # Flip upstreams: mark all down, bring the new one up
+        # Flip upstreams: mark all down, bring the new one up (REST + CDP slots)
+        NEW_CDP=\$((NEW_PORT + 20))
+        CDP_A=\$(($PORT_A + 20))
+        CDP_B=\$(($PORT_B + 20))
         sed -i "s|server 127.0.0.1:$PORT_A[^;]*;|server 127.0.0.1:$PORT_A down;|g" \$NGINX_CONF
         sed -i "s|server 127.0.0.1:$PORT_B[^;]*;|server 127.0.0.1:$PORT_B down;|g" \$NGINX_CONF
+        sed -i "s|server 127.0.0.1:\$CDP_A[^;]*;|server 127.0.0.1:\$CDP_A down;|g" \$NGINX_CONF
+        sed -i "s|server 127.0.0.1:\$CDP_B[^;]*;|server 127.0.0.1:\$CDP_B down;|g" \$NGINX_CONF
         sed -i "s|server 127.0.0.1:\$NEW_PORT down;|server 127.0.0.1:\$NEW_PORT max_fails=2 fail_timeout=5s;|" \$NGINX_CONF
+        sed -i "s|server 127.0.0.1:\$NEW_CDP down;|server 127.0.0.1:\$NEW_CDP max_fails=2 fail_timeout=5s;|" \$NGINX_CONF
 
         NEW_NOISE=\$((NEW_PORT + 30))
         NOISE_A=\$(($PORT_A + 30))
@@ -201,6 +207,11 @@ rollback() {
         # Wait healthy before touching nginx
         NGINX_CONF=/etc/nginx/sites-available/bm.todofor.ai
         STREAM_CONF=/etc/nginx/streams-available/bm-noise-stream.conf
+        # Sync nginx confs from the rollback release so the edge config matches
+        # the code being restored. Critical for the /cdp/ auth migration: rolling
+        # back to a pre-auth release must also drop its public /cdp/ location.
+        cp $DEPLOY_PATH/current/nginx/bm.todofor.ai.conf $NGINX_CONF
+        cp $DEPLOY_PATH/current/nginx/noise-stream.conf $STREAM_CONF
         for i in $(seq 1 15); do
             curl -sf http://127.0.0.1:$ROLLBACK_PORT/health >/dev/null 2>&1 && echo "✅ Rollback instance healthy" && break
             [ $i -eq 15 ] && { echo "❌ Rollback health check failed!"; pm2 logs browser-manager-$ROLLBACK_PORT --lines 40 --nostream; pm2 delete browser-manager-$ROLLBACK_PORT 2>/dev/null; exit 1; }
@@ -208,11 +219,17 @@ rollback() {
         done
 
         ROLLBACK_NOISE=$((ROLLBACK_PORT + 30))
+        ROLLBACK_CDP=$((ROLLBACK_PORT + 20))
+        CDP_A=$((PORT_A + 20))
+        CDP_B=$((PORT_B + 20))
         NOISE_A=$((PORT_A + 30))
         NOISE_B=$((PORT_B + 30))
         sed -i "s|server 127.0.0.1:$PORT_A[^;]*;|server 127.0.0.1:$PORT_A down;|g" $NGINX_CONF
         sed -i "s|server 127.0.0.1:$PORT_B[^;]*;|server 127.0.0.1:$PORT_B down;|g" $NGINX_CONF
+        sed -i "s|server 127.0.0.1:$CDP_A[^;]*;|server 127.0.0.1:$CDP_A down;|g" $NGINX_CONF
+        sed -i "s|server 127.0.0.1:$CDP_B[^;]*;|server 127.0.0.1:$CDP_B down;|g" $NGINX_CONF
         sed -i "s|server 127.0.0.1:${ROLLBACK_PORT} down;|server 127.0.0.1:${ROLLBACK_PORT} max_fails=2 fail_timeout=5s;|" $NGINX_CONF
+        sed -i "s|server 127.0.0.1:${ROLLBACK_CDP} down;|server 127.0.0.1:${ROLLBACK_CDP} max_fails=2 fail_timeout=5s;|" $NGINX_CONF
 
         sed -i "s|server 127.0.0.1:$NOISE_A[^;]*;|server 127.0.0.1:$NOISE_A down;|g" $STREAM_CONF
         sed -i "s|server 127.0.0.1:$NOISE_B[^;]*;|server 127.0.0.1:$NOISE_B down;|g" $STREAM_CONF
@@ -267,6 +284,9 @@ NODE_ENV=production
 HEADLESS=true
 HIBERNATE_DIR=/var/lib/browser-manager/hibernate
 BROWSER_MANAGER_ADMIN_KEY=CHANGE_ME
+# Public CDP reconnect endpoint + auth enforcement (agent-browser / Playwright).
+CDP_PUBLIC_URL=wss://bm.todofor.ai
+CDP_REQUIRE_AUTH=true
 ENVEOF
             echo "Created default .env — edit $SHARED/.env"
         fi

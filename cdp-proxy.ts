@@ -6,20 +6,33 @@
  * 
  * Looks up the live Chrome CDP WebSocket URL from session-manager and
  * relays messages raw in both directions — pure transparent proxy.
- * No auth here; this endpoint is internal only (backend proxies it with auth).
+ *
+ * Auth: when CDP_REQUIRE_AUTH=true (prod), the upgrade is rejected unless
+ * `?token=` resolves to the session's owner. Otherwise (internal/dev) the
+ * endpoint stays open and the backend relays with auth on the user's behalf.
  */
 
 import { WebSocket, WebSocketServer, type RawData } from 'ws';
 import type { Server } from 'http';
 import { getRawSession, touchSession, setConnections, restoreSession } from './session-manager.js';
+import { authorizeCdp } from './service.js';
 
 export function attachCDPProxy(server: Server): void {
     const wss = new WebSocketServer({ noServer: true });
 
-    server.on('upgrade', (req, socket, head) => {
-        const match = req.url?.match(/^\/cdp\/([^/?]+)/);
+    server.on('upgrade', async (req, socket, head) => {
+        const url = new URL(req.url ?? '', 'http://localhost');
+        const match = url.pathname.match(/^\/cdp\/([^/?]+)/);
         if (!match) { socket.destroy(); return; }
-        wss.handleUpgrade(req, socket, head, ws => wss.emit('connection', ws, match[1]));
+        const sessionId = match[1];
+
+        if (!(await authorizeCdp(sessionId, url.searchParams.get('token') ?? undefined))) {
+            socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+            socket.destroy();
+            return;
+        }
+
+        wss.handleUpgrade(req, socket, head, ws => wss.emit('connection', ws, sessionId));
     });
 
     wss.on('connection', async (client: WebSocket, sessionId: string) => {
