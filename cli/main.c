@@ -231,8 +231,8 @@ static void cmd_connect(int argc, char **argv) {
 }
 
 static void usage(void) {
-    printf("browser " BROWSER_VERSION " — TODO for AI browser CLI\n\n"
-        "Usage: browser <command> [options]\n\n"
+    printf("browser-manager-cli " BROWSER_VERSION " — TODO for AI browser-manager CLI\n\n"
+        "Usage: browser-manager-cli <command> [options]\n\n"
         "  login                       device login (auto-runs on first use)\n"
         "  logout                      remove credentials\n"
         "  whoami                      show the logged-in user\n"

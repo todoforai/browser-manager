@@ -1,0 +1,130 @@
+# Release the browser-manager CLI — triggered by pushing a tag like cli-v0.1.0.
+#
+#   git tag cli-v0.1.0 && git push origin cli-v0.1.0
+#
+# Builds browser-manager-cli-{linux,darwin}-{x86_64,aarch64} (+ windows) with
+# .sha256 sidecars, then creates a GitHub Release with those assets. The tool
+# catalog (packages/shared-fbe/src/tool_catalog.json) points its `binary` URLs
+# at releases/download/<tag>/browser-manager-cli-<platform>.
+#
+# Tag prefix is `cli-v*` so CLI releases don't collide with any service tags.
+
+name: cli-release
+
+on:
+  push:
+    tags: ['cli-v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build + release (e.g. cli-v0.1.0). Required for manual runs.'
+        required: true
+
+permissions:
+  contents: write   # for gh release create / upload
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x86_64
+            zig: x86_64-linux-musl
+          - target: linux-aarch64
+            zig: aarch64-linux-musl
+          - target: darwin-x86_64
+            zig: x86_64-macos
+          - target: darwin-aarch64
+            zig: aarch64-macos
+          - target: windows-x86_64
+            zig: x86_64-windows-gnu
+            ext: .exe
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout browser-manager
+        uses: actions/checkout@v4
+        with:
+          path: browser-manager
+          # On manual runs, build the requested tag so BROWSER_VERSION matches.
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      # c-core is a sibling repo (not a submodule). The CLI Makefile resolves
+      # its includes/sources to ../../todoforai-c-core, i.e. this checkout two
+      # levels up from browser-manager/cli.
+      - name: Checkout todoforai-c-core
+        uses: actions/checkout@v4
+        with:
+          repository: todoforai/todoforai-c-core
+          path: todoforai-c-core
+
+      - name: Install zig
+        uses: mlugg/setup-zig@v2
+        timeout-minutes: 4
+        with:
+          version: 0.13.0
+
+      - name: Build ${{ matrix.target }}
+        working-directory: browser-manager/cli
+        run: make build/browser-manager-cli-${{ matrix.target }}${{ matrix.ext }}
+
+      - name: Compute sha256
+        working-directory: browser-manager/cli/build
+        env:
+          ASSET: browser-manager-cli-${{ matrix.target }}${{ matrix.ext }}
+        run: |
+          sha256sum "$ASSET" > "$ASSET.sha256"
+          cat "$ASSET.sha256"
+
+      - name: Smoke test binary
+        if: matrix.target == 'linux-x86_64'
+        working-directory: browser-manager/cli/build
+        run: ./browser-manager-cli-linux-x86_64 version
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-manager-cli-${{ matrix.target }}
+          path: |
+            browser-manager/cli/build/browser-manager-cli-${{ matrix.target }}${{ matrix.ext }}
+            browser-manager/cli/build/browser-manager-cli-${{ matrix.target }}${{ matrix.ext }}.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List assets
+        run: ls -lah dist/
+
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create / update release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${{ steps.tag.outputs.tag }}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/* --clobber
+          else
+            gh release create "$tag" dist/* \
+              --title "browser-manager-cli $tag" \
+              --generate-notes
+          fi
