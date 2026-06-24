@@ -56,15 +56,19 @@ const tokenCache = new Map<string, CacheEntry>();
  * Both `Authorization: Bearer` and `X-API-Key` are sent — the backend matches opaque
  * CLI API keys (DB row id) via X-API-Key AND Better Auth session bearers via Authorization
  * in one call. See backend/src/trpc/context.ts:60-90.
+ *
+ * Device session tokens (`dst_…`, minted for CLIs inside a bridge shell) are not
+ * accepted at /api/v1 — they validate only at the /dst/v1 mount. Route by prefix.
  */
 async function resolveUserFromToken(token: string): Promise<string | null> {
     const hit = tokenCache.get(token);
     if (hit && hit.expiresAt > Date.now()) return hit.userId;
     if (hit) tokenCache.delete(token);
 
+    const basePath = token.startsWith('dst_') ? '/dst/v1' : '/api/v1';
     let res: Response;
     try {
-        res = await fetch(`${TODOFORAI_API}/api/v1/auth/resolve`, {
+        res = await fetch(`${TODOFORAI_API}${basePath}/auth/resolve`, {
             headers: { 'authorization': `Bearer ${token}`, 'x-api-key': token },
         });
     } catch (e) {
