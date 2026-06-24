@@ -91,6 +91,13 @@ export async function createSession(sessionId: string, opts: { userId: string; v
 
     const wsUrl = await getCDPUrl(debugPort);
 
+    // Playwright launches with a context but no page (created lazily). Open one
+    // now so the viewport is applied and CDP clients (agent-browser) find a page
+    // to attach to immediately instead of failing with "No page found".
+    const context = browser.contexts()[0] ?? await browser.newContext();
+    const page    = context.pages()[0]   ?? await context.newPage();
+    await page.setViewportSize(viewport).catch(() => {});
+
     const now = Date.now();
     const session: BrowserSession = {
         browser, wsUrl, debugPort, userId: opts.userId,
