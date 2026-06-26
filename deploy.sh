@@ -58,7 +58,16 @@ deploy() {
         ~/.bun/bin/bun install
 
         echo "Installing Playwright Chromium system dependencies..."
-        ~/.bun/bin/bun node_modules/playwright/cli.js install-deps chromium
+        # apt/dpkg locks can be held briefly by unattended upgrades or another
+        # deploy. Retry instead of failing an otherwise healthy release.
+        for i in \$(seq 1 30); do
+            if ~/.bun/bin/bun node_modules/playwright/cli.js install-deps chromium; then
+                break
+            fi
+            [ \$i -eq 30 ] && { echo "❌ Playwright dependency install failed after retries"; exit 1; }
+            echo "apt/dpkg busy; retrying Playwright deps in 10s (\$i/30)..."
+            sleep 10
+        done
 
         echo "Installing Playwright Chromium..."
         ~/.bun/bin/bun node_modules/playwright/cli.js install chromium
