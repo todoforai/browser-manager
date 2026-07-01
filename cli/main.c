@@ -132,6 +132,54 @@ static void cmd_login(int argc, char **argv) {
 static void cmd_whoami(void) { if (login_print_whoami("browser") != 0) exit(1); }
 static void cmd_logout(void) { if (login_logout("browser") != 0) exit(1); }
 
+// browser status — whoami + every open session's ready-to-run connect command.
+// Wired into the tool_catalog `statusCmd` so the agent's systemprompt lists
+// live CDP endpoints it can use verbatim (the cdpUrl already carries the auth
+// token in prod, so `agent-browser connect '<url>'` works out of the box).
+static void cmd_status(int argc, char **argv) {
+    ko_longopt_t lo[] = {{ "help", ko_no_argument, 'h' }, { 0, 0, 0 }};
+    ketopt_t opt = KETOPT_INIT; int c;
+    while ((c = ketopt(&opt, argc, argv, 1, "h", lo)) >= 0) {
+        if (c == 'h') { fputs("Usage: browser status\n", stdout); exit(0); }
+        cli_parse_error("browser", "status", argc, argv, &opt, c);
+    }
+    if (opt.ind != argc) cli_usage_error("browser", "status", "unexpected argument");
+
+    // Auth signal first — exit non-zero (via login_print_whoami) marks the tool
+    // unauthenticated in the catalog. Sessions are a best-effort add-on below.
+    if (login_print_whoami("browser") != 0) exit(1);
+
+    char resp[16384];
+    send_rpc_capture("browser.list", "{}", resp, sizeof(resp));
+
+    // Walk each session object (keyed by its leading "sessionId"). cdpUrl is the
+    // last field per object and always present; bound lookups to this object's
+    // span [cur, next) so an absent optional `url` can't bleed from the next one.
+    int n = 0;
+    const char *cur = resp;
+    while ((cur = strstr(cur, "\"sessionId\"")) != NULL) {
+        const char *next = strstr(cur + 1, "\"sessionId\"");
+        char sid[128] = {0}, status[32] = {0}, url[512] = {0}, cdp[600] = {0};
+        json_find_string(cur, "sessionId", sid, sizeof(sid));
+        json_find_string(cur, "status",    status, sizeof(status));
+        const char *cdp_at = strstr(cur, "\"cdpUrl\"");
+        if (cdp_at && (!next || cdp_at < next)) json_find_string(cdp_at, "cdpUrl", cdp, sizeof(cdp));
+        const char *url_at = strstr(cur, "\"url\"");
+        if (url_at && (!next || url_at < next)) json_find_string(url_at, "url", url, sizeof(url));
+
+        if (cdp[0]) {
+            if (n == 0) printf("\nOpen browser sessions (connect with agent-browser):\n");
+            n++;
+            printf("  • %s [%s]%s%s\n", sid, status[0] ? status : "?",
+                   url[0] ? "  " : "", url);
+            printf("    agent-browser connect '%s'\n", cdp);
+        }
+        if (!next) break;
+        cur = next;
+    }
+    if (n == 0) printf("\nNo open browser sessions. Create one: browser-manager-cli create\n");
+}
+
 static void cmd_simple(const char *type, int argc, char **argv) {
     ko_longopt_t lo[] = {{ "help", ko_no_argument, 'h' }, { 0, 0, 0 }};
     ketopt_t opt = KETOPT_INIT; int c;
@@ -236,6 +284,7 @@ static void usage(void) {
         "  login                       device login (auto-runs on first use)\n"
         "  logout                      remove credentials\n"
         "  whoami                      show the logged-in user\n"
+        "  status                      whoami + connect command per open session\n"
         "  version                     show version\n\n"
         "  health\n"
         "  create [--width <px> --height <px>]\n"
@@ -268,6 +317,7 @@ int main(int argc, char **argv) {
     if      (!strcmp(cmd, "login"))           cmd_login(sub_argc, sub_argv);
     else if (!strcmp(cmd, "logout"))          cmd_logout();
     else if (!strcmp(cmd, "whoami"))          cmd_whoami();
+    else if (!strcmp(cmd, "status"))          cmd_status(sub_argc, sub_argv);
     else if (!strcmp(cmd, "health"))          cmd_simple("health.get", sub_argc, sub_argv);
     else if (!strcmp(cmd, "create"))          cmd_create(sub_argc, sub_argv);
     else if (!strcmp(cmd, "list"))            cmd_simple("browser.list", sub_argc, sub_argv);
