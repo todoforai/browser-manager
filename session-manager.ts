@@ -135,20 +135,20 @@ export async function createSession(sessionId: string, opts: { userId: string; v
         args: [...(launchOpts.args ?? []), ...CHROMIUM_ARGS, `--remote-debugging-port=${debugPort}`],
     });
 
-    let wsUrl: string;
+    let wsUrl: string, context, page;
     try {
-        wsUrl = await getCDPUrl(debugPort);
-
-        // Open one page now (CloakBrowser's stealth-safe context defaults are already
-        // applied at launch) so the viewport is set and CDP clients attach immediately.
-        const context = browser.contexts()[0] ?? await browser.newContext();
-        const page    = context.pages()[0]   ?? await context.newPage();
-        await page.setViewportSize(viewport).catch(() => {});
+        wsUrl   = await getCDPUrl(debugPort);
+        context = browser.contexts()[0] ?? await browser.newContext();
+        page    = context.pages()[0]    ?? await context.newPage();
     } catch (e) {
         // Never leak the Chromium process if the CDP endpoint never came up.
         await browser.close().catch(() => {});
         throw e;
     }
+
+    // Open one page now (CloakBrowser's stealth-safe context defaults are already
+    // applied at launch) so the viewport is set and CDP clients attach immediately.
+    await page.setViewportSize(viewport).catch(() => {});
 
     // Capture the *resolved* identity from the launch flags — geoip may have
     // derived tz/locale from the proxy IP. Persisting these (not just the original
