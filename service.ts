@@ -11,10 +11,11 @@ import {
     listSessions as listBrowserSessions,
     restoreSession as restoreBrowserSession,
 } from './session-manager.js';
-import type { HibernatedSession, SessionInfo, Viewport } from './types.js';
+import type { HibernatedSession, SessionInfo, Viewport, StealthOptions } from './types.js';
 
 export interface CreateSessionInput {
     viewport?: Viewport;
+    stealth?: StealthOptions;
 }
 
 // Error codes thrown by authenticate() / requireOwner(). Mapped at the edge (api.ts, noise-server.ts).
@@ -149,7 +150,7 @@ function withCdpToken<T extends SessionInfo | null>(info: T, token?: string): T 
 
 export async function createSession(input: CreateSessionInput, token?: string, actAs?: string): Promise<SessionInfo> {
     const { userId } = await authenticate(token, actAs);
-    return withCdpToken(await createBrowserSession(crypto.randomUUID(), { userId, viewport: input.viewport }), token);
+    return withCdpToken(await createBrowserSession(crypto.randomUUID(), { userId, viewport: input.viewport, stealth: input.stealth }), token);
 }
 
 export async function getSession(sessionId: string, token?: string, actAs?: string): Promise<SessionInfo | null> {

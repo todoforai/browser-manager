@@ -57,20 +57,29 @@ deploy() {
         cd $DEPLOY_PATH/releases/$RELEASE
         ~/.bun/bin/bun install
 
-        echo "Installing Playwright Chromium system dependencies..."
-        # apt/dpkg locks can be held briefly by unattended upgrades or another
-        # deploy. Retry instead of failing an otherwise healthy release.
+        echo "Installing Chromium system dependencies..."
+        # CloakBrowser's binary is a full Chromium and needs the same system libs;
+        # playwright-core (a dep) ships the installer. apt/dpkg locks can be held
+        # briefly by unattended upgrades or another deploy — retry instead of
+        # failing an otherwise healthy release.
         for i in \$(seq 1 30); do
-            if ~/.bun/bin/bun node_modules/playwright/cli.js install-deps chromium; then
+            if ~/.bun/bin/bun node_modules/playwright-core/cli.js install-deps chromium; then
                 break
             fi
-            [ \$i -eq 30 ] && { echo "❌ Playwright dependency install failed after retries"; exit 1; }
-            echo "apt/dpkg busy; retrying Playwright deps in 10s (\$i/30)..."
+            [ \$i -eq 30 ] && { echo "❌ Chromium dependency install failed after retries"; exit 1; }
+            echo "apt/dpkg busy; retrying deps in 10s (\$i/30)..."
             sleep 10
         done
 
-        echo "Installing Playwright Chromium..."
-        ~/.bun/bin/bun node_modules/playwright/cli.js install chromium
+        # Best-effort: real Windows fonts make the Windows fingerprint spoof render
+        # correctly. Never gate the deploy on this — msttcorefonts needs contrib +
+        # EULA and isn't on minimal images. A warning is enough.
+        echo "Installing Windows fonts for fingerprint spoofing (best-effort)..."
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ttf-mscorefonts-installer fonts-liberation \
+            || echo "⚠️  Windows fonts not installed — Windows spoof may render with fallback fonts (non-fatal)"
+
+        echo "Downloading CloakBrowser stealth Chromium binary..."
+        ~/.bun/bin/bun node_modules/cloakbrowser/dist/cli.js install
 
         echo "Linking shared dir for ecosystem.config.cjs to read..."
         ln -sfn $DEPLOY_PATH/shared $DEPLOY_PATH/releases/$RELEASE/shared
@@ -284,8 +293,8 @@ setup() {
         fi
 
         # Chromium system deps (libnspr4, libnss3, fonts, …) are installed by
-        # `playwright install-deps chromium` during deploy(), using the version
-        # pinned in package-lock.json — keeps the dep set tracking Playwright.
+        # `playwright-core install-deps chromium` during deploy(); the stealth
+        # Chromium binary itself is fetched by the cloakbrowser CLI.
 
         if [ ! -f $SHARED/.env ]; then
             cat > $SHARED/.env << 'ENVEOF'

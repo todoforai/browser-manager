@@ -1,4 +1,4 @@
-import type { Viewport } from './types.js';
+import type { Viewport, StealthOptions, ProxyConfig } from './types.js';
 
 export interface NoiseRequest {
     id: string;
@@ -27,6 +27,7 @@ export interface IdPayload {
 
 export interface CreateBrowserPayload {
     viewport?: Viewport;
+    stealth?: StealthOptions;
 }
 
 export const ok = (id: string, result: unknown): NoiseResponse => ({ id, ok: true, result });
@@ -54,11 +55,26 @@ export function isViewport(value: unknown): value is Viewport {
         && value.height > 0;
 }
 
+const isOptStr = (v: unknown): v is string | undefined => v === undefined || typeof v === 'string';
+
+export function isProxyConfig(value: unknown): value is ProxyConfig {
+    return isObject(value)
+        && typeof value.server === 'string' && value.server.length > 0
+        && isOptStr(value.username) && isOptStr(value.password) && isOptStr(value.bypass);
+}
+
+export function isStealthOptions(value: unknown): value is StealthOptions {
+    return isObject(value)
+        && (value.proxy === undefined || isProxyConfig(value.proxy))
+        && isOptStr(value.locale) && isOptStr(value.timezone);
+}
+
 export function isIdPayload(value: unknown): value is IdPayload {
     return isObject(value) && typeof value.id === 'string' && value.id.length > 0;
 }
 
 export function isCreateBrowserPayload(value: unknown): value is CreateBrowserPayload {
     return isObject(value)
-        && (value.viewport === undefined || isViewport(value.viewport));
+        && (value.viewport === undefined || isViewport(value.viewport))
+        && (value.stealth === undefined || isStealthOptions(value.stealth));
 }

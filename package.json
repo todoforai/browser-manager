@@ -5,20 +5,23 @@
   "description": "CDP browser session manager — spawns Chromium instances and proxies raw CDP WebSocket per session",
   "main": "server.ts",
   "scripts": {
-    "dev": "tsx watch server.ts",
-    "start": "tsx server.ts",
+    "dev": "bun --watch server.ts",
+    "start": "bun server.ts",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "web:dev": "bun run web/dev-server.js",
-    "install-browsers": "npx playwright install chromium"
+    "install-browsers": "node node_modules/cloakbrowser/dist/cli.js install"
   },
   "dependencies": {
+    "@shared/web": "file:./vendor/shared-web",
+    "@todoforai/noise": "file:../noise-ts",
+    "cloakbrowser": "^0.4.5",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
-    "playwright": "^1.58.0",
-    "@todoforai/noise": "file:../noise-ts",
-    "@shared/web": "file:./vendor/shared-web",
+    "mmdb-lib": "^3.0.2",
+    "playwright-core": "^1.58.0",
+    "socks-proxy-agent": "^10.0.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {
@@ -26,7 +29,6 @@
     "@types/express": "^5.0.6",
     "@types/node": "^24.0.0",
     "@types/ws": "^8.18.1",
-    "tsx": "^4.21.0",
     "typescript": "^5.9.3"
   }
 }

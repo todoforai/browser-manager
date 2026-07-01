@@ -13,6 +13,7 @@
  */
 
 import { Router, Request, Response } from 'express';
+import { isStealthOptions } from './noise-protocol.js';
 import {
     createSession, getSession, listSessions,
     deleteSession, deleteAllForCaller,
@@ -51,7 +52,11 @@ router.post('/', wrap(async (req, res) => {
     const vp       = req.body.viewport;
     const viewport = (vp && typeof vp.width === 'number' && typeof vp.height === 'number'
         && vp.width > 0 && vp.height > 0) ? { width: vp.width, height: vp.height } : undefined;
-    res.json(await createSession({ viewport }, token(req), actAs(req)));
+    // Reject a malformed stealth block rather than silently dropping it — a typo'd
+    // proxy would otherwise launch a direct-IP session, exactly what it's meant to avoid.
+    const stealth = req.body.stealth;
+    if (stealth !== undefined && !isStealthOptions(stealth)) throw new Error('invalid payload');
+    res.json(await createSession({ viewport, stealth }, token(req), actAs(req)));
 }));
 
 router.get('/hibernated', wrap(async (req, res) => {

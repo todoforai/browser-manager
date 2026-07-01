@@ -7,16 +7,27 @@
  * the cdp-proxy (never sent to external callers).
  */
 
-import { chromium } from 'playwright';
+// CloakBrowser ships a custom Chromium with ~58 source-level C++ fingerprint
+// patches (canvas/WebGL/audio/fonts/WebRTC/CDP signals) — antibot systems score
+// it as a real browser because it is one. We drive it with plain playwright-core:
+// buildLaunchOptions() hands us { executablePath, args, ignoreDefaultArgs, proxy }
+// pointing at the patched binary, and we still launch with --remote-debugging-port
+// so the CDP relay (cdp-proxy.ts) is unchanged.
+import { chromium } from 'playwright-core';
+import { buildLaunchOptions } from 'cloakbrowser';
 import { createServer as createNetServer } from 'net';
 import fs from 'fs/promises';
 import path from 'path';
-import type { SessionInfo, BrowserSession, HibernatedSession, Viewport } from './types.js';
+import type { SessionInfo, BrowserSession, HibernatedSession, Viewport, StealthOptions } from './types.js';
 
+// Infra-only flags (containerization). Stealth args come from CloakBrowser.
 const CHROMIUM_ARGS = [
     '--disable-dev-shm-usage', '--no-sandbox', '--disable-setuid-sandbox',
     '--disable-background-timer-throttling', '--mute-audio',
 ];
+
+// Optional Pro tier: newest binary + anti-bot patches. Empty → free v146.
+const CLOAK_LICENSE_KEY = process.env.CLOAKBROWSER_LICENSE_KEY?.trim() || undefined;
 
 const IDLE_TIMEOUT_MS      = 5  * 60 * 1000;  // active → idle after 5 min with 0 connections
 const HIBERNATE_TIMEOUT_MS = 30 * 60 * 1000;  // idle → hibernated after 30 min
@@ -77,31 +88,65 @@ async function getCDPUrl(port: number, retries = 10, delayMs = 200): Promise<str
     throw new Error(`Chrome CDP not ready on port ${port} after ${retries} retries`);
 }
 
+/** Pull the effective timezone/locale back out of CloakBrowser's launch flags so
+ *  the stored identity reflects what geoip actually resolved. Keeps the original
+ *  proxy config; pins the resolved tz/locale for stable restores. */
+function captureResolvedStealth(stealth: StealthOptions | undefined, args: string[] | undefined): StealthOptions | undefined {
+    if (!stealth) return undefined;
+    const flag = (name: string) => args?.find(a => a.startsWith(`${name}=`))?.split('=')[1];
+    return {
+        ...stealth,
+        timezone: stealth.timezone ?? flag('--fingerprint-timezone'),
+        locale:   stealth.locale   ?? flag('--fingerprint-locale') ?? flag('--lang'),
+    };
+}
+
 // ── Public CRUD ───────────────────────────────────────────────────────────────
 
-export async function createSession(sessionId: string, opts: { userId: string; viewport?: Viewport }): Promise<SessionInfo> {
+export async function createSession(sessionId: string, opts: { userId: string; viewport?: Viewport; stealth?: StealthOptions }): Promise<SessionInfo> {
     if (sessions.has(sessionId)) return toInfo(sessionId, sessions.get(sessionId)!);
 
     const viewport  = opts.viewport ?? { width: 1280, height: 720 };
+    const stealth   = opts.stealth;
     const debugPort = await freePort();
-    const browser   = await chromium.launch({
+
+    // CloakBrowser resolves the patched binary, proxy, and — via geoip — a
+    // timezone/locale that matches the proxy's exit IP, all as binary flags (not
+    // detectable CDP emulation). A proxy with geoip is what makes a session
+    // "better than local": a fresh, geo-consistent residential identity.
+    // Derive whichever of tz/locale the caller didn't pin so the identity is
+    // never half-set (e.g. GB proxy + en-US locale = a flag).
+    const launchOpts = await buildLaunchOptions({
         headless: process.env.HEADLESS !== 'false',
-        args: [...CHROMIUM_ARGS, `--remote-debugging-port=${debugPort}`],
+        licenseKey: CLOAK_LICENSE_KEY,
+        proxy: stealth?.proxy,
+        locale: stealth?.locale,
+        timezone: stealth?.timezone,
+        geoip: !!(stealth?.proxy && (!stealth.timezone || !stealth.locale)),
+    });
+    const browser = await chromium.launch({
+        ...launchOpts,
+        args: [...(launchOpts.args ?? []), ...CHROMIUM_ARGS, `--remote-debugging-port=${debugPort}`],
     });
 
     const wsUrl = await getCDPUrl(debugPort);
 
-    // Playwright launches with a context but no page (created lazily). Open one
-    // now so the viewport is applied and CDP clients (agent-browser) find a page
-    // to attach to immediately instead of failing with "No page found".
+    // Open one page now (CloakBrowser's stealth-safe context defaults are already
+    // applied at launch) so the viewport is set and CDP clients attach immediately.
     const context = browser.contexts()[0] ?? await browser.newContext();
     const page    = context.pages()[0]   ?? await context.newPage();
     await page.setViewportSize(viewport).catch(() => {});
 
+    // Capture the *resolved* identity from the launch flags — geoip may have
+    // derived tz/locale from the proxy IP. Persisting these (not just the original
+    // request) means a hibernate→restore reuses the exact same identity instead of
+    // re-resolving geoip against a proxy whose exit IP may have rotated.
+    const resolvedStealth = captureResolvedStealth(stealth, launchOpts.args);
+
     const now = Date.now();
     const session: BrowserSession = {
         browser, wsUrl, debugPort, userId: opts.userId,
-        createdAt: now, lastActiveAt: now, viewport, connections: 0, status: 'active',
+        createdAt: now, lastActiveAt: now, viewport, stealth: resolvedStealth, connections: 0, status: 'active',
     };
 
     browser.on('disconnected', () => sessions.delete(sessionId));
@@ -173,6 +218,7 @@ export async function hibernateSession(sessionId: string): Promise<HibernateResu
     const data: HibernatedSession = {
         sessionId, userId: s.userId, url,
         viewport: s.viewport,
+        stealth: s.stealth,
         hibernatedAt: Date.now(),
         createdAt: s.createdAt,
     };
@@ -207,7 +253,7 @@ async function restoreSessionInner(sessionId: string): Promise<SessionInfo | nul
     const data = await getHibernated(sessionId);
     if (!data) return null;
 
-    const info = await createSession(sessionId, { userId: data.userId, viewport: data.viewport });
+    const info = await createSession(sessionId, { userId: data.userId, viewport: data.viewport, stealth: data.stealth });
 
     // Navigate to saved URL
     if (data.url && data.url !== 'about:blank') {

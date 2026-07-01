@@ -52,8 +52,8 @@ const envFromDisk = {
 };
 
 // REST app — Chromium-on-demand. Binds REST + admin + CDP + Noise sockets.
-// Dev uses bun --watch (single PID PM2 can signal cleanly — tsx --watch
-// forks a child PM2 can't track, wedging the process on restart).
+// Dev uses bun --watch (single PID PM2 can signal cleanly — a watcher that
+// forks a child PM2 can't track would wedge the process on restart).
 const restApp = {
   name: `browser-manager-${port}`,
   script: 'server.ts',

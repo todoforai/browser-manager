@@ -1,12 +1,31 @@
-import type { Browser } from 'playwright';
+import type { Browser } from 'playwright-core';
 
 export type SessionStatus = 'active' | 'idle' | 'hibernated';
+
+/** Upstream proxy for a session. Set once at launch so the whole browser process
+ *  egresses through one IP; persisted so restore reuses the same sticky identity. */
+export interface ProxyConfig {
+    server: string;        // http://host:port or socks5://host:port
+    username?: string;
+    password?: string;
+    bypass?: string;       // comma-separated hosts that skip the proxy
+}
+
+/** Per-session stealth/identity knobs. Kept together so create → hibernate →
+ *  restore all carry the same identity (a session that changes IP/timezone on
+ *  restore is an instant anti-bot flag). */
+export interface StealthOptions {
+    proxy?: ProxyConfig;
+    locale?: string;       // e.g. 'en-US' — drives navigator.language + Accept-Language
+    timezone?: string;     // IANA id, e.g. 'America/New_York' — must match proxy geo
+}
 
 export interface HibernatedSession {
     sessionId: string;
     userId: string;
     url: string;
     viewport: Viewport;
+    stealth?: StealthOptions;
     hibernatedAt: number;
     createdAt: number;
 }
@@ -39,6 +58,7 @@ export interface BrowserSession {
     createdAt: number;
     lastActiveAt: number;
     viewport: Viewport;
+    stealth?: StealthOptions;
     connections: number;
     status: SessionStatus;
 }
