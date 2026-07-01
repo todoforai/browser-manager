@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include "noise.h"
 #include "args.h"
 
@@ -24,12 +25,30 @@
 
 static void fatal(const char *msg) { fprintf(stderr, "error: %s\n", msg); exit(1); }
 
+static int g_json_output = 0;  // --json: print raw RPC responses instead of formatting
+
 static int parse_positive_int(const char *s) {
     if (!s || !*s) return -1;
     char *end = NULL;
     long v = strtol(s, &end, 10);
     if (!end || *end || v <= 0 || v > 1000000) return -1;
     return (int)v;
+}
+
+// Find a numeric field's value (e.g. `"width":1920`). Returns 1 and sets *out
+// on success, 0 if the key is absent or not a plain number.
+static int json_find_number(const char *json, const char *key, long *out) {
+    char needle[128];
+    snprintf(needle, sizeof(needle), "\"%s\"", key);
+    const char *p = strstr(json, needle);
+    if (!p) return 0;
+    p += strlen(needle);
+    while (*p == ' ' || *p == ':' || *p == '\t') p++;
+    char *end = NULL;
+    long v = strtol(p, &end, 10);
+    if (end == p) return 0;
+    *out = v;
+    return 1;
 }
 
 // Resolve browser-manager addr. Precedence: env > saved creds > default.
@@ -101,13 +120,62 @@ static int send_rpc_capture(const char *type, const char *payload_json,
     return rn;
 }
 
-// Send an RPC and print the raw JSON response (legacy behavior for most cmds).
-static void send_rpc(const char *type, const char *payload_json) {
-    char resp[8192];
-    send_rpc_capture(type, payload_json, resp, sizeof(resp));
+// Send an RPC and print the raw JSON response verbatim (used for --json).
+static void print_raw(const char *resp) {
     fputs(resp, stdout);
     size_t len = strlen(resp);
     if (len == 0 || resp[len - 1] != '\n') putchar('\n');
+}
+
+// One line per session, concise and script-friendly: status, cdpUrl, dims.
+// Bounded to this object's span [obj, obj_end) so fields can't bleed across
+// sessions in a list response.
+static void print_session_line(const char *obj, const char *obj_end) {
+    char tmp[4096];
+    size_t span = obj_end ? (size_t)(obj_end - obj) : strlen(obj);
+    if (span >= sizeof(tmp)) span = sizeof(tmp) - 1;
+    memcpy(tmp, obj, span);
+    tmp[span] = '\0';
+
+    char status[32] = {0}, cdp[600] = {0};
+    long w = 0, h = 0;
+    json_find_string(tmp, "status", status, sizeof(status));
+    json_find_string(tmp, "cdpUrl", cdp, sizeof(cdp));
+    json_find_number(tmp, "width",  &w);
+    json_find_number(tmp, "height", &h);
+
+    printf("%s\t%s\t%ldx%ld\n", status[0] ? status : "?", cdp, w, h);
+}
+
+// Walk each session object in a browser.list-shaped response (array of objects
+// keyed by "sessionId") and call fn(obj_start, obj_end) for each.
+static void for_each_session(const char *resp, void (*fn)(const char *, const char *)) {
+    const char *cur = resp;
+    while ((cur = strstr(cur, "\"sessionId\"")) != NULL) {
+        const char *next = strstr(cur + 1, "\"sessionId\"");
+        fn(cur, next);
+        if (!next) break;
+        cur = next;
+    }
+}
+
+// Hibernated sessions have no status/cdpUrl (browser process is gone) — just
+// the last known url and viewport. One line: sessionId, url, WxH.
+static void print_hibernated_line(const char *obj, const char *obj_end) {
+    char tmp[4096];
+    size_t span = obj_end ? (size_t)(obj_end - obj) : strlen(obj);
+    if (span >= sizeof(tmp)) span = sizeof(tmp) - 1;
+    memcpy(tmp, obj, span);
+    tmp[span] = '\0';
+
+    char sid[128] = {0}, url[512] = {0};
+    long w = 0, h = 0;
+    json_find_string(tmp, "sessionId", sid, sizeof(sid));
+    json_find_string(tmp, "url", url, sizeof(url));
+    json_find_number(tmp, "width",  &w);
+    json_find_number(tmp, "height", &h);
+
+    printf("%s\t%s\t%ldx%ld\n", sid, url, w, h);
 }
 
 // ── Subcommands ──────────────────────────────────────────────────────────────
@@ -132,6 +200,17 @@ static void cmd_login(int argc, char **argv) {
 static void cmd_whoami(void) { if (login_print_whoami("browser") != 0) exit(1); }
 static void cmd_logout(void) { if (login_logout("browser") != 0) exit(1); }
 
+// If the RPC response is an error envelope, print it (raw if --json, else a
+// friendly "error: <message>" to stderr) and exit 1. Returns otherwise.
+static void check_rpc_error(const char *resp) {
+    if (!json_envelope_is_error(resp)) return;
+    if (g_json_output) { print_raw(resp); exit(1); }
+    char msg[512] = {0};
+    json_find_string(resp, "message", msg, sizeof(msg));
+    fprintf(stderr, "error: %s\n", msg[0] ? msg : resp);
+    exit(1);
+}
+
 // browser status — whoami + every open session's ready-to-run connect command.
 // Wired into the tool_catalog `statusCmd` so the agent's systemprompt lists
 // live CDP endpoints it can use verbatim (the cdpUrl already carries the auth
@@ -145,42 +224,30 @@ static void cmd_status(int argc, char **argv) {
     }
     if (opt.ind != argc) cli_usage_error("browser", "status", "unexpected argument");
 
+    if (g_json_output) {
+        char resp[16384];
+        send_rpc_capture("browser.list", "{}", resp, sizeof(resp));
+        print_raw(resp);
+        return;
+    }
+
     // Auth signal first — exit non-zero (via login_print_whoami) marks the tool
     // unauthenticated in the catalog. Sessions are a best-effort add-on below.
     if (login_print_whoami("browser") != 0) exit(1);
 
     char resp[16384];
     send_rpc_capture("browser.list", "{}", resp, sizeof(resp));
+    if (json_envelope_is_error(resp)) return;  // best-effort; whoami already succeeded
 
-    // Walk each session object (keyed by its leading "sessionId"). cdpUrl is the
-    // last field per object and always present; bound lookups to this object's
-    // span [cur, next) so an absent optional `url` can't bleed from the next one.
-    int n = 0;
-    const char *cur = resp;
-    while ((cur = strstr(cur, "\"sessionId\"")) != NULL) {
-        const char *next = strstr(cur + 1, "\"sessionId\"");
-        char sid[128] = {0}, status[32] = {0}, url[512] = {0}, cdp[600] = {0};
-        json_find_string(cur, "sessionId", sid, sizeof(sid));
-        json_find_string(cur, "status",    status, sizeof(status));
-        const char *cdp_at = strstr(cur, "\"cdpUrl\"");
-        if (cdp_at && (!next || cdp_at < next)) json_find_string(cdp_at, "cdpUrl", cdp, sizeof(cdp));
-        const char *url_at = strstr(cur, "\"url\"");
-        if (url_at && (!next || url_at < next)) json_find_string(url_at, "url", url, sizeof(url));
-
-        if (cdp[0]) {
-            if (n == 0) printf("\nOpen browser sessions (connect with agent-browser):\n");
-            n++;
-            printf("  • %s [%s]%s%s\n", sid, status[0] ? status : "?",
-                   url[0] ? "  " : "", url);
-            printf("    agent-browser connect '%s'\n", cdp);
-        }
-        if (!next) break;
-        cur = next;
+    if (!strstr(resp, "\"sessionId\"")) {
+        printf("\nNo open browser sessions. Create one: browser-manager-cli create\n");
+        return;
     }
-    if (n == 0) printf("\nNo open browser sessions. Create one: browser-manager-cli create\n");
+    printf("\nOpen browser sessions (status / cdpUrl / dimensions):\n");
+    for_each_session(resp, print_session_line);
 }
 
-static void cmd_simple(const char *type, int argc, char **argv) {
+static void cmd_simple(const char *type, const char *empty_msg, int argc, char **argv) {
     ko_longopt_t lo[] = {{ "help", ko_no_argument, 'h' }, { 0, 0, 0 }};
     ketopt_t opt = KETOPT_INIT; int c;
     while ((c = ketopt(&opt, argc, argv, 1, "h", lo)) >= 0) {
@@ -188,10 +255,39 @@ static void cmd_simple(const char *type, int argc, char **argv) {
         cli_parse_error("browser", type, argc, argv, &opt, c);
     }
     if (opt.ind != argc) cli_usage_error("browser", type, "unexpected argument");
-    send_rpc(type, "{}");
+
+    char resp[16384];
+    send_rpc_capture(type, "{}", resp, sizeof(resp));
+    check_rpc_error(resp);
+    if (g_json_output) { print_raw(resp); return; }
+
+    if (!strcmp(type, "browser.list")) {
+        if (!strstr(resp, "\"sessionId\"")) { puts(empty_msg); return; }
+        for_each_session(resp, print_session_line);
+    } else if (!strcmp(type, "browser.hibernated.list")) {
+        if (!strstr(resp, "\"sessionId\"")) { puts(empty_msg); return; }
+        for_each_session(resp, print_hibernated_line);
+    } else if (!strcmp(type, "health.get")) {
+        char status[32] = {0}, memory[32] = {0};
+        long uptime = 0;
+        json_find_string(resp, "status", status, sizeof(status));
+        json_find_string(resp, "memory", memory, sizeof(memory));
+        json_find_number(resp, "uptime", &uptime);
+        printf("%s\tuptime=%lds\tmem=%s\n", status[0] ? status : "?", uptime, memory);
+    } else if (!strcmp(type, "browser.delete_all")) {
+        long deleted = 0;
+        json_find_number(resp, "deleted", &deleted);
+        printf("deleted %ld session%s\n", deleted, deleted == 1 ? "" : "s");
+    } else {
+        print_raw(resp);
+    }
 }
 
-static void cmd_with_id(const char *type, int argc, char **argv) {
+// What to print for a successful browser.<verb> response keyed by <id>.
+typedef enum { RESULT_SESSION, RESULT_ACK } result_kind_t;
+
+static void cmd_with_id(const char *type, result_kind_t kind, const char *ack_msg,
+                        int argc, char **argv) {
     ko_longopt_t lo[] = {{ "help", ko_no_argument, 'h' }, { 0, 0, 0 }};
     ketopt_t opt = KETOPT_INIT; int c;
     while ((c = ketopt(&opt, argc, argv, 1, "h", lo)) >= 0) {
@@ -204,7 +300,13 @@ static void cmd_with_id(const char *type, int argc, char **argv) {
 
     char payload[256];
     snprintf(payload, sizeof(payload), "{\"id\":\"%s\"}", id);
-    send_rpc(type, payload);
+    char resp[8192];
+    send_rpc_capture(type, payload, resp, sizeof(resp));
+    check_rpc_error(resp);
+    if (g_json_output) { print_raw(resp); return; }
+
+    if (kind == RESULT_SESSION) print_session_line(resp, NULL);
+    else printf("%s %s\n", ack_msg, id);
 }
 
 static void cmd_create(int argc, char **argv) {
@@ -234,7 +336,12 @@ static void cmd_create(int argc, char **argv) {
     } else {
         snprintf(payload, sizeof(payload), "{}");
     }
-    send_rpc("browser.create", payload);
+
+    char resp[8192];
+    send_rpc_capture("browser.create", payload, resp, sizeof(resp));
+    check_rpc_error(resp);
+    if (g_json_output) { print_raw(resp); return; }
+    print_session_line(resp, NULL);
 }
 
 // browser connect <id> [--exec]
@@ -261,34 +368,32 @@ static void cmd_connect(int argc, char **argv) {
     snprintf(payload, sizeof(payload), "{\"id\":\"%s\"}", id);
     char resp[8192];
     send_rpc_capture("browser.get", payload, resp, sizeof(resp));
+    check_rpc_error(resp);
+    if (g_json_output) { print_raw(resp); return; }
 
     char cdp_url[512] = {0};
-    if (!json_find_string(resp, "cdpUrl", cdp_url, sizeof(cdp_url)) || !cdp_url[0]) {
-        fputs(resp, stderr);
-        if (resp[0] && resp[strlen(resp) - 1] != '\n') fputc('\n', stderr);
-        fatal("no cdpUrl in response (session not found?)");
-    }
+    if (!json_find_string(resp, "cdpUrl", cdp_url, sizeof(cdp_url)) || !cdp_url[0])
+        fatal("no cdpUrl in response");
 
     if (do_exec) {
-        char cmd[640];
-        snprintf(cmd, sizeof(cmd), "agent-browser connect '%s'", cdp_url);
-        int rc = system(cmd);
-        exit(rc == 0 ? 0 : 1);
+        // execvp (no shell) so cdp_url can't be interpreted as shell syntax.
+        execlp("agent-browser", "agent-browser", "connect", cdp_url, (char *)NULL);
+        fatal("failed to exec agent-browser (is it on PATH?)");
     }
     printf("agent-browser connect '%s'\n", cdp_url);
 }
 
 static void usage(void) {
     printf("browser-manager-cli " BROWSER_VERSION " — TODO for AI browser-manager CLI\n\n"
-        "Usage: browser-manager-cli <command> [options]\n\n"
+        "Usage: browser-manager-cli [--json] <command> [options]\n\n"
         "  login                       device login (auto-runs on first use)\n"
         "  logout                      remove credentials\n"
         "  whoami                      show the logged-in user\n"
-        "  status                      whoami + connect command per open session\n"
+        "  status                      whoami + one line per open session\n"
         "  version                     show version\n\n"
         "  health\n"
         "  create [--width <px> --height <px>]\n"
-        "  list\n"
+        "  list                        one line per session: status, cdpUrl, WxH\n"
         "  get <id>\n"
         "  connect <id> [--exec]       print (or run) the agent-browser connect command\n"
         "  delete <id>\n"
@@ -296,6 +401,7 @@ static void usage(void) {
         "  hibernate <id>\n"
         "  restore <id>\n"
         "  hibernated-list\n\n"
+        "  --json         print raw JSON instead of human-readable output\n"
         "  -h, --help     show help\n"
         "  -v, --version  show version\n\n"
         "Env (rarely needed):\n"
@@ -303,7 +409,19 @@ static void usage(void) {
         "  BROWSER_NOISE_PORT   browser-manager port (default: " DEFAULT_BROWSER_PORT ")\n");
 }
 
+// Strip a global `--json` flag from argv (it can appear anywhere), setting
+// g_json_output and compacting the array in place. Returns the new argc.
+static int strip_json_flag(int argc, char **argv) {
+    int out = 0;
+    for (int i = 0; i < argc; i++) {
+        if (!strcmp(argv[i], "--json")) { g_json_output = 1; continue; }
+        argv[out++] = argv[i];
+    }
+    return out;
+}
+
 int main(int argc, char **argv) {
+    argc = strip_json_flag(argc, argv);
     if (argc < 2)                              { usage(); return 1; }
     if (cli_is_help(argv[1]))                  { usage(); return 0; }
     if (!strcmp(argv[1], "--version") || !strcmp(argv[1], "-v") || !strcmp(argv[1], "version")) {
@@ -318,16 +436,16 @@ int main(int argc, char **argv) {
     else if (!strcmp(cmd, "logout"))          cmd_logout();
     else if (!strcmp(cmd, "whoami"))          cmd_whoami();
     else if (!strcmp(cmd, "status"))          cmd_status(sub_argc, sub_argv);
-    else if (!strcmp(cmd, "health"))          cmd_simple("health.get", sub_argc, sub_argv);
+    else if (!strcmp(cmd, "health"))          cmd_simple("health.get", "status=unknown", sub_argc, sub_argv);
     else if (!strcmp(cmd, "create"))          cmd_create(sub_argc, sub_argv);
-    else if (!strcmp(cmd, "list"))            cmd_simple("browser.list", sub_argc, sub_argv);
-    else if (!strcmp(cmd, "get"))             cmd_with_id("browser.get", sub_argc, sub_argv);
+    else if (!strcmp(cmd, "list"))            cmd_simple("browser.list", "No open sessions. Create one: browser-manager-cli create", sub_argc, sub_argv);
+    else if (!strcmp(cmd, "get"))             cmd_with_id("browser.get", RESULT_SESSION, NULL, sub_argc, sub_argv);
     else if (!strcmp(cmd, "connect"))         cmd_connect(sub_argc, sub_argv);
-    else if (!strcmp(cmd, "delete"))          cmd_with_id("browser.delete", sub_argc, sub_argv);
-    else if (!strcmp(cmd, "delete-all"))      cmd_simple("browser.delete_all", sub_argc, sub_argv);
-    else if (!strcmp(cmd, "hibernate"))       cmd_with_id("browser.hibernate", sub_argc, sub_argv);
-    else if (!strcmp(cmd, "restore"))         cmd_with_id("browser.restore", sub_argc, sub_argv);
-    else if (!strcmp(cmd, "hibernated-list")) cmd_simple("browser.hibernated.list", sub_argc, sub_argv);
+    else if (!strcmp(cmd, "delete"))          cmd_with_id("browser.delete", RESULT_ACK, "deleted", sub_argc, sub_argv);
+    else if (!strcmp(cmd, "delete-all"))      cmd_simple("browser.delete_all", "deleted 0 sessions", sub_argc, sub_argv);
+    else if (!strcmp(cmd, "hibernate"))       cmd_with_id("browser.hibernate", RESULT_ACK, "hibernated", sub_argc, sub_argv);
+    else if (!strcmp(cmd, "restore"))         cmd_with_id("browser.restore", RESULT_SESSION, NULL, sub_argc, sub_argv);
+    else if (!strcmp(cmd, "hibernated-list")) cmd_simple("browser.hibernated.list", "No hibernated sessions.", sub_argc, sub_argv);
     else { usage(); return 1; }
     return 0;
 }
