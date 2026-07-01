@@ -93,11 +93,17 @@ async function getCDPUrl(port: number, retries = 10, delayMs = 200): Promise<str
  *  proxy config; pins the resolved tz/locale for stable restores. */
 function captureResolvedStealth(stealth: StealthOptions | undefined, args: string[] | undefined): StealthOptions | undefined {
     if (!stealth) return undefined;
-    const flag = (name: string) => args?.find(a => a.startsWith(`${name}=`))?.split('=')[1];
+    // slice after the first '=' (values may themselves contain '=').
+    const flag = (name: string) => {
+        const prefix = `${name}=`;
+        return args?.find(a => a.startsWith(prefix))?.slice(prefix.length);
+    };
+    // --lang can be an Accept-Language list ("en-GB,en;q=0.9") — keep the first tag.
+    const lang = flag('--lang')?.split(',')[0]?.trim() || undefined;
     return {
         ...stealth,
         timezone: stealth.timezone ?? flag('--fingerprint-timezone'),
-        locale:   stealth.locale   ?? flag('--fingerprint-locale') ?? flag('--lang'),
+        locale:   stealth.locale   ?? flag('--fingerprint-locale') ?? lang,
     };
 }
 
@@ -129,13 +135,20 @@ export async function createSession(sessionId: string, opts: { userId: string; v
         args: [...(launchOpts.args ?? []), ...CHROMIUM_ARGS, `--remote-debugging-port=${debugPort}`],
     });
 
-    const wsUrl = await getCDPUrl(debugPort);
+    let wsUrl: string;
+    try {
+        wsUrl = await getCDPUrl(debugPort);
 
-    // Open one page now (CloakBrowser's stealth-safe context defaults are already
-    // applied at launch) so the viewport is set and CDP clients attach immediately.
-    const context = browser.contexts()[0] ?? await browser.newContext();
-    const page    = context.pages()[0]   ?? await context.newPage();
-    await page.setViewportSize(viewport).catch(() => {});
+        // Open one page now (CloakBrowser's stealth-safe context defaults are already
+        // applied at launch) so the viewport is set and CDP clients attach immediately.
+        const context = browser.contexts()[0] ?? await browser.newContext();
+        const page    = context.pages()[0]   ?? await context.newPage();
+        await page.setViewportSize(viewport).catch(() => {});
+    } catch (e) {
+        // Never leak the Chromium process if the CDP endpoint never came up.
+        await browser.close().catch(() => {});
+        throw e;
+    }
 
     // Capture the *resolved* identity from the launch flags — geoip may have
     // derived tz/locale from the proxy IP. Persisting these (not just the original
