@@ -119,6 +119,9 @@ jobs:
       - name: Create / update release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # This job has no checkout, so gh has no local git context — pass the
+          # repo explicitly or gh fails with "not a git repository".
+          GH_REPO: ${{ github.repository }}
         run: |
           tag="${{ steps.tag.outputs.tag }}"
           if gh release view "$tag" >/dev/null 2>&1; then
