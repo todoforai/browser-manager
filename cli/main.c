@@ -27,6 +27,34 @@ static void fatal(const char *msg) { fprintf(stderr, "error: %s\n", msg); exit(1
 
 static int g_json_output = 0;  // --json: print raw RPC responses instead of formatting
 
+// Checked JSON builders: each fatals on overflow so a too-long argument can
+// never push the write pointer past `end`. `end` points one past the last
+// writable byte; helpers require the bytes they write to fit before `end`,
+// leaving the caller room for a trailing NUL.
+static void append_bytes(char **out, char *end, const char *s, size_t n) {
+    if (n > (size_t)(end - *out)) fatal("proxy arguments too long");
+    memcpy(*out, s, n);
+    *out += n;
+}
+
+static void append_str(char **out, char *end, const char *s) {
+    append_bytes(out, end, s, strlen(s));
+}
+
+// Append s as a JSON string body (no surrounding quotes), escaping the
+// characters JSON forbids in a string. Fatals rather than truncate.
+static void json_escape_into(char **out, char *end, const char *s) {
+    for (; *s; s++) {
+        unsigned char c = (unsigned char)*s;
+        if      (c == '"' || c == '\\') { char e[2] = { '\\', (char)c }; append_bytes(out, end, e, 2); }
+        else if (c == '\n')             { append_bytes(out, end, "\\n", 2); }
+        else if (c == '\r')             { append_bytes(out, end, "\\r", 2); }
+        else if (c == '\t')             { append_bytes(out, end, "\\t", 2); }
+        else if (c < 0x20)              { char e[7]; int n = snprintf(e, sizeof(e), "\\u%04x", c); append_bytes(out, end, e, (size_t)n); }
+        else                            { append_bytes(out, end, (const char *)&c, 1); }
+    }
+}
+
 static int parse_positive_int(const char *s) {
     if (!s || !*s) return -1;
     char *end = NULL;
@@ -310,77 +338,75 @@ static void cmd_with_id(const char *type, result_kind_t kind, const char *ack_ms
 }
 
 static void cmd_create(int argc, char **argv) {
+    static const char *USAGE =
+        "create [--width <px> --height <px>] [--proxy <url>] [--proxy-user <u>] [--proxy-pass <p>]";
     const char *width_s = NULL, *height_s = NULL;
+    const char *proxy = NULL, *proxy_user = NULL, *proxy_pass = NULL;
     ko_longopt_t lo[] = {
-        { "help",   ko_no_argument,       'h' },
-        { "width",  ko_required_argument, 'w' },
-        { "height", ko_required_argument, 'g' },
+        { "help",       ko_no_argument,       'h' },
+        { "width",      ko_required_argument, 'w' },
+        { "height",     ko_required_argument, 'g' },
+        { "proxy",      ko_required_argument, 'p' },
+        { "proxy-user", ko_required_argument, 'u' },
+        { "proxy-pass", ko_required_argument, 'x' },
         { 0, 0, 0 }
     };
     ketopt_t opt = KETOPT_INIT; int c;
-    while ((c = ketopt(&opt, argc, argv, 1, "hw:g:", lo)) >= 0) {
-        if (c == 'h') { fputs("Usage: browser create [--width <px> --height <px>]\n", stdout); exit(0); }
+    while ((c = ketopt(&opt, argc, argv, 1, "hw:g:p:u:x:", lo)) >= 0) {
+        if (c == 'h') { cli_usage(stdout, "browser", USAGE); exit(0); }
         if (c == 'w') { width_s = opt.arg; continue; }
         if (c == 'g') { height_s = opt.arg; continue; }
+        if (c == 'p') { proxy = opt.arg; continue; }
+        if (c == 'u') { proxy_user = opt.arg; continue; }
+        if (c == 'x') { proxy_pass = opt.arg; continue; }
         cli_parse_error("browser", "create", argc, argv, &opt, c);
     }
     if (opt.ind != argc) cli_usage_error("browser", "create", "unexpected argument");
     if ((width_s && !height_s) || (!width_s && height_s))
         cli_usage_error("browser", "create", "--width and --height must be provided together");
+    if ((proxy_user || proxy_pass) && !proxy)
+        cli_usage_error("browser", "create", "--proxy-user/--proxy-pass require --proxy");
 
-    char payload[128];
+    // Build the payload incrementally so viewport and stealth.proxy compose.
+    // The server geoip-resolves locale/timezone from the proxy exit IP, so the
+    // CLI only needs to pass the proxy itself. Every append is bounds-checked
+    // (append_*/json_escape_into fatal on overflow); w_end reserves the last
+    // byte for the trailing NUL written after the loop.
+    char payload[1024];
+    char *w_out = payload, *w_end = payload + sizeof(payload) - 1;
+    append_str(&w_out, w_end, "{");
     if (width_s) {
         int w = parse_positive_int(width_s), h = parse_positive_int(height_s);
         if (w <= 0 || h <= 0) cli_usage_error("browser", "create", "--width/--height must be positive");
-        snprintf(payload, sizeof(payload), "{\"viewport\":{\"width\":%d,\"height\":%d}}", w, h);
-    } else {
-        snprintf(payload, sizeof(payload), "{}");
+        char vp[64];
+        snprintf(vp, sizeof(vp), "\"viewport\":{\"width\":%d,\"height\":%d}", w, h);
+        append_str(&w_out, w_end, vp);
     }
+    if (proxy) {
+        if (w_out[-1] != '{') append_str(&w_out, w_end, ",");
+        append_str(&w_out, w_end, "\"stealth\":{\"proxy\":{\"server\":\"");
+        json_escape_into(&w_out, w_end, proxy);
+        append_str(&w_out, w_end, "\"");
+        if (proxy_user) {
+            append_str(&w_out, w_end, ",\"username\":\"");
+            json_escape_into(&w_out, w_end, proxy_user);
+            append_str(&w_out, w_end, "\"");
+        }
+        if (proxy_pass) {
+            append_str(&w_out, w_end, ",\"password\":\"");
+            json_escape_into(&w_out, w_end, proxy_pass);
+            append_str(&w_out, w_end, "\"");
+        }
+        append_str(&w_out, w_end, "}}");
+    }
+    append_str(&w_out, w_end, "}");
+    *w_out = '\0';
 
     char resp[8192];
     send_rpc_capture("browser.create", payload, resp, sizeof(resp));
     check_rpc_error(resp);
     if (g_json_output) { print_raw(resp); return; }
     print_session_line(resp, NULL);
-}
-
-// browser connect <id> [--exec]
-// Resolves the session's CDP URL and prints (or runs) the agent-browser command.
-static void cmd_connect(int argc, char **argv) {
-    static const char *USAGE = "connect <id> [--exec]";
-    int do_exec = 0;
-    ko_longopt_t lo[] = {
-        { "help", ko_no_argument, 'h' },
-        { "exec", ko_no_argument, 'e' },
-        { 0, 0, 0 }
-    };
-    ketopt_t opt = KETOPT_INIT; int c;
-    while ((c = ketopt(&opt, argc, argv, 1, "he", lo)) >= 0) {
-        if (c == 'h') { cli_usage(stdout, "browser", USAGE); exit(0); }
-        if (c == 'e') { do_exec = 1; continue; }
-        cli_parse_error("browser", "connect", argc, argv, &opt, c);
-    }
-    if (opt.ind >= argc) cli_usage_error("browser", "connect", "missing <id>");
-    const char *id = argv[opt.ind++];
-    if (opt.ind != argc) cli_usage_error("browser", "connect", "unexpected argument");
-
-    char payload[256];
-    snprintf(payload, sizeof(payload), "{\"id\":\"%s\"}", id);
-    char resp[8192];
-    send_rpc_capture("browser.get", payload, resp, sizeof(resp));
-    check_rpc_error(resp);
-    if (g_json_output) { print_raw(resp); return; }
-
-    char cdp_url[512] = {0};
-    if (!json_find_string(resp, "cdpUrl", cdp_url, sizeof(cdp_url)) || !cdp_url[0])
-        fatal("no cdpUrl in response");
-
-    if (do_exec) {
-        // execvp (no shell) so cdp_url can't be interpreted as shell syntax.
-        execlp("agent-browser", "agent-browser", "connect", cdp_url, (char *)NULL);
-        fatal("failed to exec agent-browser (is it on PATH?)");
-    }
-    printf("agent-browser connect '%s'\n", cdp_url);
 }
 
 static void usage(void) {
@@ -392,10 +418,9 @@ static void usage(void) {
         "  status                      whoami + one line per open session\n"
         "  version                     show version\n\n"
         "  health\n"
-        "  create [--width <px> --height <px>]\n"
+        "  create [--width <px> --height <px>] [--proxy <url> [--proxy-user <u>] [--proxy-pass <p>]]\n"
         "  list                        one line per session: status, cdpUrl, WxH\n"
         "  get <id>\n"
-        "  connect <id> [--exec]       print (or run) the agent-browser connect command\n"
         "  delete <id>\n"
         "  delete-all\n"
         "  hibernate <id>\n"
@@ -440,7 +465,6 @@ int main(int argc, char **argv) {
     else if (!strcmp(cmd, "create"))          cmd_create(sub_argc, sub_argv);
     else if (!strcmp(cmd, "list"))            cmd_simple("browser.list", "No open sessions. Create one: browser-manager-cli create", sub_argc, sub_argv);
     else if (!strcmp(cmd, "get"))             cmd_with_id("browser.get", RESULT_SESSION, NULL, sub_argc, sub_argv);
-    else if (!strcmp(cmd, "connect"))         cmd_connect(sub_argc, sub_argv);
     else if (!strcmp(cmd, "delete"))          cmd_with_id("browser.delete", RESULT_ACK, "deleted", sub_argc, sub_argv);
     else if (!strcmp(cmd, "delete-all"))      cmd_simple("browser.delete_all", "deleted 0 sessions", sub_argc, sub_argv);
     else if (!strcmp(cmd, "hibernate"))       cmd_with_id("browser.hibernate", RESULT_ACK, "hibernated", sub_argc, sub_argv);
