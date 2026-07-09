@@ -1,4 +1,4 @@
-import type { Browser } from 'playwright-core';
+import type { Browser, BrowserContext } from 'playwright-core';
 
 export type SessionStatus = 'active' | 'idle' | 'hibernated';
 
@@ -18,6 +18,14 @@ export interface StealthOptions {
     proxy?: ProxyConfig;
     locale?: string;       // e.g. 'en-US' — drives navigator.language + Accept-Language
     timezone?: string;     // IANA id, e.g. 'America/New_York' — must match proxy geo
+    // Human-like mouse/keyboard/scroll (bezier curves, typing cadence, dwell).
+    // Behavioral scoring (DataDome, reCAPTCHA v3, Kasada) is the dominant modern
+    // detection axis; instant robotic actions are a flag everywhere. Defaults ON
+    // (server applies humanize:true when unset) — set false to opt out.
+    humanize?: boolean;
+    // Render headed. CloakBrowser recommends headless:false for login-gated /
+    // hard sites; some detectors still spot headless despite the C++ patches.
+    headless?: boolean;
 }
 
 export interface HibernatedSession {
@@ -52,6 +60,7 @@ export interface SessionInfo {
 /** Internal live session state */
 export interface BrowserSession {
     browser: Browser;
+    context: BrowserContext;   // persistent context (cookies/localStorage on disk)
     wsUrl: string;   // Chrome CDP websocket URL (internal)
     debugPort: number;
     userId: string;

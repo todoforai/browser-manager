@@ -63,10 +63,14 @@ export function isProxyConfig(value: unknown): value is ProxyConfig {
         && isOptStr(value.username) && isOptStr(value.password) && isOptStr(value.bypass);
 }
 
+const isOptBool = (v: unknown): v is boolean | undefined => v === undefined || typeof v === 'boolean';
+
 export function isStealthOptions(value: unknown): value is StealthOptions {
     return isObject(value)
         && (value.proxy === undefined || isProxyConfig(value.proxy))
-        && isOptStr(value.locale) && isOptStr(value.timezone);
+        && isOptStr(value.locale) && isOptStr(value.timezone)
+        && isOptBool(value.humanize)
+        && isOptBool(value.headless);
 }
 
 export function isIdPayload(value: unknown): value is IdPayload {

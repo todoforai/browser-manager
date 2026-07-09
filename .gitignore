@@ -1,6 +1,7 @@
 node_modules/
 dist/
 hibernate-data/
+profiles/
 .env.local
 .env.*.local
 

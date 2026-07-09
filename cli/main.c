@@ -339,26 +339,32 @@ static void cmd_with_id(const char *type, result_kind_t kind, const char *ack_ms
 
 static void cmd_create(int argc, char **argv) {
     static const char *USAGE =
-        "create [--width <px> --height <px>] [--proxy <url>] [--proxy-user <u>] [--proxy-pass <p>]";
+        "create [--width <px> --height <px>] [--proxy <url>] [--proxy-user <u>] [--proxy-pass <p>]\n"
+        "         [--no-humanize] [--headed]";
     const char *width_s = NULL, *height_s = NULL;
     const char *proxy = NULL, *proxy_user = NULL, *proxy_pass = NULL;
+    int no_humanize = 0, headed = 0;
     ko_longopt_t lo[] = {
-        { "help",       ko_no_argument,       'h' },
-        { "width",      ko_required_argument, 'w' },
-        { "height",     ko_required_argument, 'g' },
-        { "proxy",      ko_required_argument, 'p' },
-        { "proxy-user", ko_required_argument, 'u' },
-        { "proxy-pass", ko_required_argument, 'x' },
+        { "help",         ko_no_argument,       'h' },
+        { "width",        ko_required_argument, 'w' },
+        { "height",       ko_required_argument, 'g' },
+        { "proxy",        ko_required_argument, 'p' },
+        { "proxy-user",   ko_required_argument, 'u' },
+        { "proxy-pass",   ko_required_argument, 'x' },
+        { "no-humanize",  ko_no_argument,       'N' },
+        { "headed",       ko_no_argument,       'E' },
         { 0, 0, 0 }
     };
     ketopt_t opt = KETOPT_INIT; int c;
-    while ((c = ketopt(&opt, argc, argv, 1, "hw:g:p:u:x:", lo)) >= 0) {
+    while ((c = ketopt(&opt, argc, argv, 1, "hw:g:p:u:x:NE", lo)) >= 0) {
         if (c == 'h') { cli_usage(stdout, "browser", USAGE); exit(0); }
         if (c == 'w') { width_s = opt.arg; continue; }
         if (c == 'g') { height_s = opt.arg; continue; }
         if (c == 'p') { proxy = opt.arg; continue; }
         if (c == 'u') { proxy_user = opt.arg; continue; }
         if (c == 'x') { proxy_pass = opt.arg; continue; }
+        if (c == 'N') { no_humanize = 1; continue; }
+        if (c == 'E') { headed = 1; continue; }
         cli_parse_error("browser", "create", argc, argv, &opt, c);
     }
     if (opt.ind != argc) cli_usage_error("browser", "create", "unexpected argument");
@@ -367,11 +373,11 @@ static void cmd_create(int argc, char **argv) {
     if ((proxy_user || proxy_pass) && !proxy)
         cli_usage_error("browser", "create", "--proxy-user/--proxy-pass require --proxy");
 
-    // Build the payload incrementally so viewport and stealth.proxy compose.
-    // The server geoip-resolves locale/timezone from the proxy exit IP, so the
-    // CLI only needs to pass the proxy itself. Every append is bounds-checked
-    // (append_*/json_escape_into fatal on overflow); w_end reserves the last
-    // byte for the trailing NUL written after the loop.
+    // Build the payload incrementally so viewport and stealth compose. The server
+    // geoip-resolves locale/timezone from the proxy exit IP, so the CLI only
+    // passes the proxy itself. humanize/headed are stealth knobs that apply with
+    // or without a proxy. Every append is bounds-checked (append_*/json_escape_into
+    // fatal on overflow); w_end reserves the last byte for the trailing NUL.
     char payload[1024];
     char *w_out = payload, *w_end = payload + sizeof(payload) - 1;
     append_str(&w_out, w_end, "{");
@@ -382,22 +388,38 @@ static void cmd_create(int argc, char **argv) {
         snprintf(vp, sizeof(vp), "\"viewport\":{\"width\":%d,\"height\":%d}", w, h);
         append_str(&w_out, w_end, vp);
     }
-    if (proxy) {
+    // stealth block: emitted whenever ANY stealth knob is set. humanize is ON by
+    // default server-side, so we only emit it (as false) when --no-humanize opts out.
+    if (proxy || no_humanize || headed) {
+        int first = 1;
         if (w_out[-1] != '{') append_str(&w_out, w_end, ",");
-        append_str(&w_out, w_end, "\"stealth\":{\"proxy\":{\"server\":\"");
-        json_escape_into(&w_out, w_end, proxy);
-        append_str(&w_out, w_end, "\"");
-        if (proxy_user) {
-            append_str(&w_out, w_end, ",\"username\":\"");
-            json_escape_into(&w_out, w_end, proxy_user);
+        append_str(&w_out, w_end, "\"stealth\":{");
+        if (proxy) {
+            append_str(&w_out, w_end, "\"proxy\":{\"server\":\"");
+            json_escape_into(&w_out, w_end, proxy);
             append_str(&w_out, w_end, "\"");
+            if (proxy_user) {
+                append_str(&w_out, w_end, ",\"username\":\"");
+                json_escape_into(&w_out, w_end, proxy_user);
+                append_str(&w_out, w_end, "\"");
+            }
+            if (proxy_pass) {
+                append_str(&w_out, w_end, ",\"password\":\"");
+                json_escape_into(&w_out, w_end, proxy_pass);
+                append_str(&w_out, w_end, "\"");
+            }
+            append_str(&w_out, w_end, "}");
+            first = 0;
         }
-        if (proxy_pass) {
-            append_str(&w_out, w_end, ",\"password\":\"");
-            json_escape_into(&w_out, w_end, proxy_pass);
-            append_str(&w_out, w_end, "\"");
+        if (no_humanize) {
+            append_str(&w_out, w_end, first ? "\"humanize\":false" : ",\"humanize\":false");
+            first = 0;
         }
-        append_str(&w_out, w_end, "}}");
+        if (headed) {
+            append_str(&w_out, w_end, first ? "\"headless\":false" : ",\"headless\":false");
+            first = 0;
+        }
+        append_str(&w_out, w_end, "}");
     }
     append_str(&w_out, w_end, "}");
     *w_out = '\0';
@@ -419,6 +441,7 @@ static void usage(void) {
         "  version                     show version\n\n"
         "  health\n"
         "  create [--width <px> --height <px>] [--proxy <url> [--proxy-user <u>] [--proxy-pass <p>]]\n"
+        "         [--no-humanize] [--headed]\n"
         "  list                        one line per session: status, cdpUrl, WxH\n"
         "  get <id>\n"
         "  delete <id>\n"
