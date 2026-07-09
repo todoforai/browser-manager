@@ -10,6 +10,7 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "web:dev": "bun run web/dev-server.js",
+    "warm-profile": "bun scripts/warm-profile.ts",
     "install-browsers": "node node_modules/cloakbrowser/dist/cli.js install"
   },
   "dependencies": {

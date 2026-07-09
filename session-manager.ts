@@ -53,6 +53,33 @@ const hibernatePath = (id: string) => path.join(HIBERNATE_DIR, `${safeId(id)}.js
 const PROFILE_DIR   = process.env.PROFILE_DIR ?? './profiles';
 const profilePath   = (id: string) => path.join(PROFILE_DIR, safeId(id));
 
+// A warmed, secret-free profile template (see scripts/warm-profile.ts). Seeding a
+// brand-new session from it makes the first launch look like a returning browser
+// — warmed prefs, engine caches and populated profile dirs — instead of a cold
+// incognito-grade profile, which is the single biggest anti-bot tell. It holds NO
+// cookies and NO auth (all identity stores are scrubbed), so a single template is
+// safe to share across every user without cross-user correlation. Each user's
+// first visit still mints its own fresh guest cookies on top.
+// Unset → sessions start cold (previous behavior).
+const PROFILE_SEED_DIR = process.env.PROFILE_SEED_DIR?.trim() || undefined;
+
+/** Copy the warm template into a fresh profile dir. Best-effort: a missing or
+ *  broken seed must never block session creation, so failures fall back to cold.
+ *  Copy into a staging dir first, then rename in — so a half-finished copy can
+ *  never become the live profile (a partial seed would launch a corrupt browser
+ *  instead of a clean cold one). */
+async function seedProfile(userDataDir: string): Promise<void> {
+    if (!PROFILE_SEED_DIR) return;
+    const staging = `${userDataDir}.seed-${process.pid}-${Date.now()}`;
+    try {
+        await fs.cp(PROFILE_SEED_DIR, staging, { recursive: true });
+        await fs.rename(staging, userDataDir);
+    } catch (e) {
+        await fs.rm(staging, { recursive: true, force: true }).catch(() => {});
+        console.warn(`[browser-manager] profile seed failed, starting cold: ${e instanceof Error ? e.message : e}`);
+    }
+}
+
 // ── State ─────────────────────────────────────────────────────────────────────
 
 const sessions   = new Map<string, BrowserSession>();
@@ -145,6 +172,9 @@ export async function createSession(sessionId: string, opts: { userId: string; v
     // is reopening.
     const userDataDir  = profilePath(sessionId);
     const profileIsNew = !(await fs.access(userDataDir).then(() => true, () => false));
+    // A new profile starts warm (seeded from the template) rather than cold; an
+    // existing one (a restore) is left untouched so its real state survives.
+    if (profileIsNew) await seedProfile(userDataDir);
     await fs.mkdir(userDataDir, { recursive: true });
 
     // geoip derives whichever of tz/locale the caller didn't pin from the proxy's
