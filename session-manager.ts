@@ -23,9 +23,13 @@ import fs from 'fs/promises';
 import path from 'path';
 import type { SessionInfo, BrowserSession, HibernatedSession, Viewport, StealthOptions } from './types.js';
 
-// Infra-only flags (containerization). Stealth args come from CloakBrowser.
+// Infra-only flags (containerization). Stealth args (incl. --no-sandbox and the
+// --enable-automation exclusion) come from CloakBrowser, so we DON'T repeat
+// --no-sandbox here — duplicating it is what surfaced Chromium's yellow
+// "unsupported command-line flag" infobar, itself an automation tell.
+// --disable-infobars hides that bar (and any residual automation banner).
 const CHROMIUM_ARGS = [
-    '--disable-dev-shm-usage', '--no-sandbox', '--disable-setuid-sandbox',
+    '--disable-dev-shm-usage', '--disable-infobars',
     '--disable-background-timer-throttling', '--mute-audio',
 ];
 
