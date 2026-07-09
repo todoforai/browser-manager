@@ -18,10 +18,8 @@ export interface StealthOptions {
     proxy?: ProxyConfig;
     locale?: string;       // e.g. 'en-US' — drives navigator.language + Accept-Language
     timezone?: string;     // IANA id, e.g. 'America/New_York' — must match proxy geo
-    // Human-like mouse/keyboard/scroll (bezier curves, typing cadence, dwell).
-    // Behavioral scoring (DataDome, reCAPTCHA v3, Kasada) is the dominant modern
-    // detection axis; instant robotic actions are a flag everywhere. Defaults ON
-    // (server applies humanize:true when unset) — set false to opt out.
+    // Human-like mouse/keyboard/scroll (bezier curves, typing cadence). Defaults
+    // ON (server applies true when unset) — set false to opt out.
     humanize?: boolean;
     // Render headed. CloakBrowser recommends headless:false for login-gated /
     // hard sites; some detectors still spot headless despite the C++ patches.

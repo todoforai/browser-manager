@@ -7,16 +7,10 @@
  * the cdp-proxy (never sent to external callers).
  */
 
-// CloakBrowser ships a custom Chromium with ~58 source-level C++ fingerprint
-// patches (canvas/WebGL/audio/fonts/WebRTC/CDP signals) — antibot systems score
-// it as a real browser because it is one. We launch it via CloakBrowser's
-// launchPersistentContext(): a non-incognito profile on disk so cookies,
-// localStorage and device-trust state SURVIVE across sessions and hibernation.
-// A cold incognito browser is the single biggest bot tell (BrowserScan -10%,
-// and every login gate treats a fresh device with zero history as suspicious);
-// a warm returning profile is what makes automation generally undetected.
-// We still pass --remote-debugging-port so the CDP relay (cdp-proxy.ts) is
-// unchanged, and humanize/headless are applied by CloakBrowser at launch.
+// Launched via CloakBrowser's launchPersistentContext(): a non-incognito profile
+// on disk so cookies/localStorage/device-trust survive across sessions and
+// hibernation (a cold incognito browser is the biggest bot tell). We still pass
+// --remote-debugging-port so the CDP relay (cdp-proxy.ts) is unchanged.
 import { launchPersistentContext } from 'cloakbrowser';
 import { createServer as createNetServer } from 'net';
 import fs from 'fs/promises';
@@ -146,24 +140,16 @@ export async function createSession(sessionId: string, opts: { userId: string; v
     // for login-gated / hard sites. Env HEADLESS=false flips the global default.
     const headless  = stealth?.headless ?? (process.env.HEADLESS !== 'false');
 
-    // Persistent profile dir — created on first launch, reused on restore. This
-    // is what carries cookies/localStorage/device-trust forward across sessions.
-    // Track whether it's brand new so a failed create can clean up after itself
-    // without wiping an existing warm profile that a restore is reopening.
+    // Profile dir: created on first launch, reused on restore. profileIsNew lets a
+    // failed create clean up after itself without wiping a warm profile a restore
+    // is reopening.
     const userDataDir  = profilePath(sessionId);
     const profileIsNew = !(await fs.access(userDataDir).then(() => true, () => false));
     await fs.mkdir(userDataDir, { recursive: true });
 
-    // CloakBrowser resolves the patched binary, proxy, and — via geoip — a
-    // timezone/locale that matches the proxy's exit IP, all as binary flags (not
-    // detectable CDP emulation). A proxy with geoip is what makes a session
-    // "better than local": a fresh, geo-consistent residential identity.
-    // Derive whichever of tz/locale the caller didn't pin so the identity is
-    // never half-set (e.g. GB proxy + en-US locale = a flag). humanize adds the
-    // behavioral layer (bezier mouse, typing cadence) that defeats behavioral
-    // scoring — applied at launch, so scripted agent-browser clicks/types go
-    // through it automatically. launchPersistentContext gives a non-incognito
-    // profile: cookies/localStorage survive, killing the #1 cold-browser bot tell.
+    // geoip derives whichever of tz/locale the caller didn't pin from the proxy's
+    // exit IP (a half-set identity — e.g. GB proxy + en-US locale — is a flag).
+    // humanize (bezier mouse, typing cadence) is on by default; opt out with false.
     let context;
     try {
         context = await launchPersistentContext({
@@ -174,9 +160,6 @@ export async function createSession(sessionId: string, opts: { userId: string; v
             locale: stealth?.locale,
             timezone: stealth?.timezone,
             geoip: !!(stealth?.proxy && (!stealth.timezone || !stealth.locale)),
-            // Human-like behavior is on by default — a bot manager almost always
-            // wants it, and robotic timing is a detection axis on its own. Callers
-            // opt out with humanize:false; CloakBrowser's built-in preset is used.
             humanize: stealth?.humanize ?? true,
             args: [...CHROMIUM_ARGS, `--remote-debugging-port=${debugPort}`],
         });
@@ -201,11 +184,8 @@ export async function createSession(sessionId: string, opts: { userId: string; v
     // applied at launch) so the viewport is set and CDP clients attach immediately.
     await page.setViewportSize(viewport).catch(() => {});
 
-    // Capture the *resolved* identity: geoip may have derived tz/locale from the
-    // proxy IP. Read the effective values back from the running browser so a
-    // hibernate→restore pins the exact same identity instead of re-resolving
-    // geoip against a proxy whose exit IP may have rotated. Behavioral knobs
-    // (humanize/headless) are part of identity too, so they carry across restore.
+    // Pin the geoip-resolved tz/locale (read back from the running browser) so a
+    // hibernate→restore reuses the exact same identity instead of re-resolving.
     const resolvedStealth = await captureResolvedStealth(stealth, page, headless);
 
     const now = Date.now();
@@ -239,6 +219,10 @@ export function sessionIdsForUser(userId: string): string[] {
 }
 
 export async function deleteSession(sessionId: string): Promise<void> {
+    // If a restore is materializing this session, let it finish first so we don't
+    // remove the profile/JSON out from under a launching Chromium (or have restore
+    // resurrect a session we just deleted). Delete then operates on a settled state.
+    await inflightRestores.get(sessionId)?.catch(() => {});
     // Delete from both active and hibernated state — callers shouldn't care which.
     const s = sessions.get(sessionId);
     if (s) {
@@ -264,8 +248,15 @@ export async function deleteAllForUser(userId: string): Promise<number> {
     return ids.size;
 }
 
-export async function deleteAllSessions(): Promise<void> {
-    await Promise.all([...sessions.keys()].map(deleteSession));
+/** Shutdown-only: close every live browser (flushing its persistent profile to
+ *  disk) WITHOUT deleting the profile. A restart/redeploy must keep warm profiles;
+ *  only an explicit deleteSession() erases one. */
+export async function closeAllSessions(): Promise<void> {
+    await Promise.all([...sessions.values()].map(async s => {
+        await s.context.close().catch(() => {});
+        await s.browser.close().catch(() => {});
+    }));
+    sessions.clear();
 }
 
 // ── Hibernate / Restore ───────────────────────────────────────────────────────

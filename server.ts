@@ -23,7 +23,7 @@ import { startNoiseServer } from './noise-server.js';
 import { startAdminServer } from '@shared/web/server-helpers';
 import { health, adminListAll, adminListHibernated, adminStats } from './service.js';
 import {
-    deleteAllSessions,
+    closeAllSessions,
     deleteSession as deleteBrowserSession,
     hibernateSession as hibernateBrowserSession,
     restoreSession as restoreBrowserSession,
@@ -126,7 +126,7 @@ async function start() {
 
     const shutdown = async (sig: string) => {
         console.log(`\n🛑 ${sig}`);
-        await deleteAllSessions();
+        await closeAllSessions();
         httpServer.close();
         adminServer.close();
         cdpServer.close();
