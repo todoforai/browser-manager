@@ -164,7 +164,8 @@ deploy() {
         sed -i "s|server 127.0.0.1:\$NOISE_B[^;]*;|server 127.0.0.1:\$NOISE_B down;|g" \$STREAM_CONF
         sed -i "s|server 127.0.0.1:\$NEW_NOISE down;|server 127.0.0.1:\$NEW_NOISE max_fails=2 fail_timeout=5s;|" \$STREAM_CONF
 
-        nginx -t && systemctl reload nginx
+        nginx -t || { echo "❌ nginx config test failed — aborting"; exit 1; }
+        systemctl reload nginx
 
         # Drain old instance (if any) — nginx already switched, safe to stop
         if [ -n "\$OLD_PORT" ]; then
@@ -253,7 +254,8 @@ rollback() {
         sed -i "s|server 127.0.0.1:$NOISE_B[^;]*;|server 127.0.0.1:$NOISE_B down;|g" $STREAM_CONF
         sed -i "s|server 127.0.0.1:${ROLLBACK_NOISE} down;|server 127.0.0.1:${ROLLBACK_NOISE} max_fails=2 fail_timeout=5s;|" $STREAM_CONF
 
-        nginx -t && systemctl reload nginx
+        nginx -t || { echo "❌ nginx config test failed — aborting"; exit 1; }
+        systemctl reload nginx
 
         if [ -n "$LIVE_PORT" ]; then
             pm2 delete browser-manager-$LIVE_PORT 2>/dev/null || true
