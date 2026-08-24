@@ -5,11 +5,37 @@
 <title>Browsers · TODO for AI</title>
 <link rel="icon" type="image/svg+xml" href="./shared/favicon.svg">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="shared/theme.css">
 <style>
+  /* Self-hosted Geist (same variable fonts as the main app — no third-party CDN). */
+  @font-face {
+    font-family: 'Geist';
+    src: url('./fonts/GeistVF.woff2') format('woff2');
+    font-weight: 100 900;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: 'Geist Mono';
+    src: url('./fonts/GeistMonoVF.woff2') format('woff2');
+    font-weight: 100 900;
+    font-display: swap;
+  }
+
+  /* Ambient chamber: warm brand glow from the top (matches vault panel). */
+  body::before {
+    content: '';
+    position: fixed; inset: 0; pointer-events: none; z-index: 0;
+    background: radial-gradient(640px 300px at 50% -90px, rgba(249, 110, 46, 0.13), transparent 70%);
+  }
+  main.app-main, footer.app-footer { position: relative; z-index: 1; }
+
+  /* Glass stat cards. */
+  .stat {
+    background: rgba(255, 255, 255, 0.035);
+    -webkit-backdrop-filter: blur(6px);
+    backdrop-filter: blur(6px);
+  }
+
   /* Browser-manager specific bits — session card + viewport picker. */
   .sess-list { display: flex; flex-direction: column; gap: 10px; }
   .sess {
@@ -17,11 +43,16 @@
     grid-template-columns: 4px 1fr auto;
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
-    background: var(--card);
+    background: rgba(255, 255, 255, 0.035);
+    -webkit-backdrop-filter: blur(6px);
+    backdrop-filter: blur(6px);
     overflow: hidden;
-    transition: border-color .12s;
+    transition: border-color .15s, background .15s;
   }
-  .sess:hover { border-color: color-mix(in srgb, var(--foreground) 18%, transparent); }
+  .sess:hover {
+    border-color: color-mix(in srgb, var(--primary) 45%, transparent);
+    background: color-mix(in srgb, var(--primary) 5%, transparent);
+  }
   .sess-stripe { background: var(--muted-foreground); }
   .sess[data-status="active"]     .sess-stripe { background: var(--success); }
   .sess[data-status="idle"]       .sess-stripe { background: var(--warning); }
