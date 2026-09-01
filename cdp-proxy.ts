@@ -30,7 +30,10 @@ export function attachCDPProxy(server: Server): void {
         // WebSocket with a policy-violation code. Writing a raw HTTP error on
         // the upgrade socket doesn't flush reliably under bun (the prod runtime)
         // and surfaces as an nginx 502, so we authorize post-upgrade instead.
-        const ok = await authorizeCdp(sessionId, url.searchParams.get('token') ?? undefined);
+        // Token comes from `?token=` (browser clients) or the Authorization
+        // header (server-to-server callers, who must keep secrets out of URLs).
+        const headerToken = String(req.headers.authorization ?? '').match(/^Bearer\s+(.+)$/i)?.[1];
+        const ok = await authorizeCdp(sessionId, url.searchParams.get('token') ?? headerToken ?? undefined);
         wss.handleUpgrade(req, socket, head, ws => {
             if (!ok) { ws.close(1008, 'Unauthorized'); return; }
             wss.emit('connection', ws, sessionId);
