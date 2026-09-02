@@ -35,6 +35,7 @@ const CLOAK_LICENSE_KEY = process.env.CLOAKBROWSER_LICENSE_KEY?.trim() || undefi
 const IDLE_TIMEOUT_MS      = 5  * 60 * 1000;  // active → idle after 5 min with 0 connections
 const HIBERNATE_TIMEOUT_MS = 30 * 60 * 1000;  // idle → hibernated after 30 min
 const IDLE_CHECK_MS        = 60 * 1000;
+const LAUNCH_TIMEOUT_MS    = 30 * 1000;
 // Session IDs index on-disk paths (hibernate JSON, persistent profile dir), so a
 // caller-supplied id must never escape its directory. Service-created ids are
 // UUIDs, but delete/restore/hibernate accept arbitrary ids from the API — reject
@@ -191,6 +192,7 @@ export async function createSession(sessionId: string, opts: { userId: string; v
     // exit IP (a half-set identity — e.g. GB proxy + en-US locale — is a flag).
     // humanize (bezier mouse, typing cadence) is on by default; opt out with false.
     let context;
+    const launchedAt = Date.now();
     try {
         context = await launchPersistentContext({
             userDataDir,
@@ -202,8 +204,12 @@ export async function createSession(sessionId: string, opts: { userId: string; v
             geoip: !!(stealth?.proxy && (!stealth.timezone || !stealth.locale)),
             humanize: stealth?.humanize ?? true,
             args: [...CHROMIUM_ARGS, `--remote-debugging-port=${debugPort}`],
+            // A healthy launch is ~1–3s. Playwright's default (180s) turns a rare
+            // wedged launch into a 3-minute outage for every coalesced restore.
+            launchOptions: { timeout: LAUNCH_TIMEOUT_MS },
         });
     } catch (e) {
+        console.error(`[browser-manager] ${sessionId} launch failed after ${Date.now() - launchedAt}ms: ${e instanceof Error ? e.message.split('\n')[0] : e}`);
         if (profileIsNew) await fs.rm(userDataDir, { recursive: true, force: true }).catch(() => {});
         throw e;
     }
