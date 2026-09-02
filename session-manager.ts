@@ -288,13 +288,15 @@ export async function deleteAllForUser(userId: string): Promise<number> {
     return ids.size;
 }
 
-/** Shutdown-only: close every live browser (flushing its persistent profile to
- *  disk) WITHOUT deleting the profile. A restart/redeploy must keep warm profiles;
- *  only an explicit deleteSession() erases one. */
+/** Shutdown-only: park every live browser as hibernated so it survives a
+ *  restart/redeploy and comes back via restore. Sessions with open CDP
+ *  connections are parked too — the client reconnects after the restart. */
 export async function closeAllSessions(): Promise<void> {
-    await Promise.all([...sessions.values()].map(async s => {
-        await s.context.close().catch(() => {});
-        await s.browser.close().catch(() => {});
+    await Promise.all([...sessions].map(async ([id, s]) => {
+        const pages = s.context.pages();
+        const page  = pages.find(p => !p.url().startsWith('about:')) ?? pages[0];
+        await persistHibernated(snapshot(id, s, page?.url() ?? 'about:blank')).catch(() => {});
+        await closeBrowser(s, id);
     }));
     sessions.clear();
 }
