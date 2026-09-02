@@ -13,6 +13,8 @@
 // --remote-debugging-port so the CDP relay (cdp-proxy.ts) is unchanged.
 import { launchPersistentContext } from 'cloakbrowser';
 import { createServer as createNetServer } from 'net';
+import { execFile as execFileCb } from 'child_process';
+import { promisify } from 'util';
 import fs from 'fs/promises';
 import path from 'path';
 import type { SessionInfo, BrowserSession, HibernatedSession, Viewport, StealthOptions } from './types.js';
@@ -44,6 +46,7 @@ function safeId(id: string): string {
 }
 
 const HIBERNATE_DIR        = process.env.HIBERNATE_DIR ?? './hibernate-data';
+const execFile             = promisify(execFileCb);
 const hibernatePath = (id: string) => path.join(HIBERNATE_DIR, `${safeId(id)}.json`);
 
 // Persistent Chromium profiles live one-per-session on disk. Keeping them keyed
@@ -224,7 +227,15 @@ export async function createSession(sessionId: string, opts: { userId: string; v
         createdAt: now, lastActiveAt: now, viewport, stealth: resolvedStealth, connections: 0, status: 'active',
     };
 
-    browser.on('disconnected', () => sessions.delete(sessionId));
+    // Chrome died on its own (crash, OOM): keep the session restorable from its
+    // warm profile instead of silently forgetting it.
+    browser.on('disconnected', () => {
+        if (sessions.get(sessionId) !== session) return;  // hibernate/delete already took it
+        sessions.delete(sessionId);
+        persistHibernated(snapshot(sessionId, session, 'about:blank'))
+            .then(() => console.log(`[browser-manager] ${sessionId} → disconnected, parked as hibernated`))
+            .catch(e => console.error(`[browser-manager] park ${sessionId} failed:`, e));
+    });
     sessions.set(sessionId, session);
 
     return toInfo(sessionId, session);
@@ -257,8 +268,7 @@ export async function deleteSession(sessionId: string): Promise<void> {
     const s = sessions.get(sessionId);
     if (s) {
         sessions.delete(sessionId);
-        await s.context.close().catch(() => {});
-        await s.browser.close().catch(() => {});
+        await closeBrowser(s, sessionId);
     }
     hibernated.delete(sessionId);
     await fs.unlink(hibernatePath(sessionId)).catch(() => {});
@@ -303,28 +313,43 @@ export async function hibernateSession(sessionId: string): Promise<HibernateResu
 
     const pages = s.context.pages();
     const page  = pages.find(p => !p.url().startsWith('about:')) ?? pages[0];
-    const url   = page?.url() ?? 'about:blank';
-
-    const data: HibernatedSession = {
-        sessionId, userId: s.userId, url,
-        viewport: s.viewport,
-        stealth: s.stealth,
-        hibernatedAt: Date.now(),
-        createdAt: s.createdAt,
-    };
+    const data  = snapshot(sessionId, s, page?.url() ?? 'about:blank');
 
     sessions.delete(sessionId);
+    // Record first so a hung/crashed close can never lose the session; the
+    // profile on disk is what restore actually needs.
+    await persistHibernated(data);
     // Close the context (flushes cookies/localStorage to the profile dir on disk)
     // but LEAVE the profile in place — restore reuses it to come back warm.
-    await s.context.close().catch(() => {});
-    await s.browser.close().catch(() => {});
+    await closeBrowser(s, sessionId);
 
-    hibernated.set(sessionId, data);
-    await fs.mkdir(HIBERNATE_DIR, { recursive: true });
-    await fs.writeFile(hibernatePath(sessionId), JSON.stringify(data));
-
-    console.log(`[browser-manager] ${sessionId} → hibernated (url: ${url})`);
+    console.log(`[browser-manager] ${sessionId} → hibernated (url: ${data.url})`);
     return 'ok';
+}
+
+function snapshot(sessionId: string, s: BrowserSession, url: string): HibernatedSession {
+    return { sessionId, userId: s.userId, url, viewport: s.viewport, stealth: s.stealth, hibernatedAt: Date.now(), createdAt: s.createdAt };
+}
+
+async function persistHibernated(data: HibernatedSession): Promise<void> {
+    hibernated.set(data.sessionId, data);
+    await fs.mkdir(HIBERNATE_DIR, { recursive: true });
+    await fs.writeFile(hibernatePath(data.sessionId), JSON.stringify(data));
+}
+
+const CLOSE_TIMEOUT_MS = 15_000;
+
+/** Graceful close; if Chromium doesn't exit in time, kill it so the profile
+ *  lock is released and the next restore can launch. */
+async function closeBrowser(s: BrowserSession, sessionId: string): Promise<void> {
+    const graceful = s.context.close().catch(() => {}).then(() => s.browser.close().catch(() => {}));
+    const timeout  = new Promise<'timeout'>(r => setTimeout(() => r('timeout'), CLOSE_TIMEOUT_MS).unref());
+    if (await Promise.race([graceful, timeout]) === 'timeout') {
+        console.warn(`[browser-manager] ${sessionId} close timed out — killing Chromium`);
+        await execFile('pkill', ['-9', '-f', `--user-data-dir=${profilePath(sessionId)}`]).catch(() => {});
+        await Promise.all([`${profilePath(sessionId)}/SingletonLock`, `${profilePath(sessionId)}/SingletonSocket`, `${profilePath(sessionId)}/SingletonCookie`]
+            .map(p => fs.rm(p, { force: true }).catch(() => {})));
+    }
 }
 
 const inflightRestores = new Map<string, Promise<SessionInfo | null>>();

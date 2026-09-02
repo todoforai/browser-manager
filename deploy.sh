@@ -303,6 +303,8 @@ setup() {
 NODE_ENV=production
 HEADLESS=true
 HIBERNATE_DIR=/var/lib/browser-manager/hibernate
+# Persistent Chromium profiles (cookies, logins) — must live outside the release dir.
+PROFILE_DIR=/var/lib/browser-manager/profiles
 BROWSER_MANAGER_ADMIN_KEY=CHANGE_ME
 # Public CDP reconnect endpoint + auth enforcement (agent-browser / Playwright).
 CDP_PUBLIC_URL=wss://bm.todofor.ai
