@@ -339,7 +339,7 @@ async function persistHibernated(data: HibernatedSession): Promise<void> {
     await fs.writeFile(hibernatePath(data.sessionId), JSON.stringify(data));
 }
 
-const CLOSE_TIMEOUT_MS = 15_000;
+const CLOSE_TIMEOUT_MS = 5_000;  // a clean close takes ~200ms; Playwright sometimes never returns
 
 /** Graceful close; if Chromium doesn't exit in time, kill it so the profile
  *  lock is released and the next restore can launch. */
