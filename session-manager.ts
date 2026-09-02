@@ -103,11 +103,18 @@ function freePort(): Promise<number> {
 
 async function pageState(s: BrowserSession): Promise<{ url?: string; title?: string }> {
     try {
+        if (!s.browser.isConnected()) return {};
         const pages = s.context.pages();
         const page  = pages.find(p => !p.url().startsWith('about:')) ?? pages[0];
         if (!page) return {};
-        return { url: page.url(), title: await page.title().catch(() => undefined) };
+        // title() can hang forever on a wedged renderer; never let a GET block on it.
+        const title = await Promise.race([page.title(), new Promise<undefined>(r => setTimeout(r, 2000))]).catch(() => undefined);
+        return { url: page.url(), title };
     } catch { return {}; }
+}
+
+async function chromiumAlive(sessionId: string): Promise<boolean> {
+    return execFile('pgrep', ['-f', '--', `--user-data-dir=${profilePath(sessionId)}`]).then(() => true, () => false);
 }
 
 // Public base for the CDP reconnect URL. Prod sets CDP_PUBLIC_URL to the
@@ -348,9 +355,12 @@ async function closeBrowser(s: BrowserSession, sessionId: string): Promise<void>
     const timeout  = new Promise<'timeout'>(r => setTimeout(() => r('timeout'), CLOSE_TIMEOUT_MS).unref());
     if (await Promise.race([graceful, timeout]) === 'timeout') {
         console.warn(`[browser-manager] ${sessionId} close timed out — killing Chromium`);
-        await execFile('pkill', ['-9', '-f', `--user-data-dir=${profilePath(sessionId)}`]).catch(() => {});
-        await Promise.all([`${profilePath(sessionId)}/SingletonLock`, `${profilePath(sessionId)}/SingletonSocket`, `${profilePath(sessionId)}/SingletonCookie`]
-            .map(p => fs.rm(p, { force: true }).catch(() => {})));
+        // `--` so pkill doesn't read the pattern as its own option.
+        await execFile('pkill', ['-9', '-f', '--', `--user-data-dir=${profilePath(sessionId)}`]).catch(() => {});
+        await new Promise(r => setTimeout(r, 500));
+        if (await chromiumAlive(sessionId)) { console.error(`[browser-manager] ${sessionId} Chromium survived SIGKILL — leaving profile lock in place`); return; }
+        await Promise.all(['SingletonLock', 'SingletonSocket', 'SingletonCookie']
+            .map(f => fs.rm(path.join(profilePath(sessionId), f), { force: true }).catch(() => {})));
     }
 }
 
