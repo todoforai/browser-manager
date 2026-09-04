@@ -354,7 +354,7 @@ async function persistHibernated(data: HibernatedSession): Promise<void> {
     await fs.writeFile(hibernatePath(data.sessionId), JSON.stringify(data));
 }
 
-const CLOSE_TIMEOUT_MS = 5_000;  // a clean close takes ~200ms; Playwright sometimes never returns
+const CLOSE_TIMEOUT_MS = 20_000;  // a clean close is ~200ms on a blank page but 5-10s after a real site (service workers, sockets); a SIGKILLed profile restores flaky
 
 /** Graceful close; if Chromium doesn't exit in time, kill it so the profile
  *  lock is released and the next restore can launch. */
@@ -365,7 +365,10 @@ async function closeBrowser(s: BrowserSession, sessionId: string): Promise<void>
     const graceful = s.context.close().catch(() => {}).then(() => s.browser.close().catch(() => {}))
         .then(async () => { while (await chromiumAlive(sessionId)) await new Promise(r => setTimeout(r, 100)); });
     const timeout  = new Promise<'timeout'>(r => setTimeout(() => r('timeout'), CLOSE_TIMEOUT_MS).unref());
-    if (await Promise.race([graceful, timeout]) === 'timeout') {
+    const t0 = Date.now();
+    const outcome = await Promise.race([graceful, timeout]);
+    console.log(`[browser-manager] ${sessionId} close ${outcome === 'timeout' ? 'TIMED OUT' : 'ok'} after ${Date.now() - t0}ms`);
+    if (outcome === 'timeout') {
         console.warn(`[browser-manager] ${sessionId} close timed out — killing Chromium`);
         // `--` so pkill doesn't read the pattern as its own option.
         await execFile('pkill', ['-9', '-f', '--', `--user-data-dir=${profilePath(sessionId)}`]).catch(() => {});
