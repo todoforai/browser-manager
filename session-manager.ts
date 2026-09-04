@@ -359,24 +359,32 @@ const CLOSE_TIMEOUT_MS = 20_000;  // a clean close is ~200ms on a blank page but
 /** Graceful close; if Chromium doesn't exit in time, kill it so the profile
  *  lock is released and the next restore can launch. */
 async function closeBrowser(s: BrowserSession, sessionId: string): Promise<void> {
-    // Playwright resolves before the Chromium process has fully exited; a restore
-    // launched in that window trips Chrome's profile singleton (the new process
-    // hands off to the dying one and quits). So wait for the process itself.
-    const graceful = s.context.close().catch(() => {}).then(() => s.browser.close().catch(() => {}))
-        .then(async () => { while (await chromiumAlive(sessionId)) await new Promise(r => setTimeout(r, 100)); });
+    // The Chromium process leaving is the real signal, not Playwright's promise:
+    //  - Playwright resolves before the process has fully exited; a restore
+    //    launched in that window trips Chrome's profile singleton (the new
+    //    process hands off to the dying one and quits).
+    //  - Under Bun the child's `exit` event is sometimes never delivered (the
+    //    process sits as a zombie), so `context.close()` would hang forever
+    //    even though Chromium is gone. pgrep doesn't match zombies, so
+    //    chromiumAlive() still reports the truth.
+    const sleep    = (ms: number) => new Promise(r => setTimeout(r, ms));
+    const closing  = s.context.close().catch(() => {}).then(() => s.browser.close().catch(() => {}));
+    const exited   = (async () => { while (await chromiumAlive(sessionId)) await sleep(100); })();
     const timeout  = new Promise<'timeout'>(r => setTimeout(() => r('timeout'), CLOSE_TIMEOUT_MS).unref());
     const t0 = Date.now();
-    const outcome = await Promise.race([graceful, timeout]);
-    console.log(`[browser-manager] ${sessionId} close ${outcome === 'timeout' ? 'TIMED OUT' : 'ok'} after ${Date.now() - t0}ms`);
-    if (outcome === 'timeout') {
-        console.warn(`[browser-manager] ${sessionId} close timed out — killing Chromium`);
-        // `--` so pkill doesn't read the pattern as its own option.
-        await execFile('pkill', ['-9', '-f', '--', `--user-data-dir=${profilePath(sessionId)}`]).catch(() => {});
-        await new Promise(r => setTimeout(r, 500));
-        if (await chromiumAlive(sessionId)) { console.error(`[browser-manager] ${sessionId} Chromium survived SIGKILL — leaving profile lock in place`); return; }
-        await Promise.all(['SingletonLock', 'SingletonSocket', 'SingletonCookie']
-            .map(f => fs.rm(path.join(profilePath(sessionId), f), { force: true }).catch(() => {})));
+    const outcome = await Promise.race([exited.then(() => 'ok' as const), timeout]);
+    if (outcome === 'ok') {
+        const pwDone = await Promise.race([closing.then(() => true), sleep(1000).then(() => false)]);
+        console.log(`[browser-manager] ${sessionId} close ok after ${Date.now() - t0}ms${pwDone ? '' : ' (Chromium exited but Playwright never saw it — runtime dropped the exit event)'}`);
+        return;
     }
+    console.warn(`[browser-manager] ${sessionId} close TIMED OUT after ${Date.now() - t0}ms — killing Chromium`);
+    // `--` so pkill doesn't read the pattern as its own option.
+    await execFile('pkill', ['-9', '-f', '--', `--user-data-dir=${profilePath(sessionId)}`]).catch(() => {});
+    await sleep(500);
+    if (await chromiumAlive(sessionId)) { console.error(`[browser-manager] ${sessionId} Chromium survived SIGKILL — leaving profile lock in place`); return; }
+    await Promise.all(['SingletonLock', 'SingletonSocket', 'SingletonCookie']
+        .map(f => fs.rm(path.join(profilePath(sessionId), f), { force: true }).catch(() => {})));
 }
 
 const inflightRestores = new Map<string, Promise<SessionInfo | null>>();
