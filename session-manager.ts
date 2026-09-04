@@ -378,7 +378,9 @@ async function closeBrowser(s: BrowserSession, sessionId: string): Promise<void>
         console.log(`[browser-manager] ${sessionId} close ok after ${Date.now() - t0}ms${pwDone ? '' : ' (Chromium exited but Playwright never saw it — runtime dropped the exit event)'}`);
         return;
     }
-    console.warn(`[browser-manager] ${sessionId} close TIMED OUT after ${Date.now() - t0}ms — killing Chromium`);
+    const survivors = await execFile('pgrep', ['-af', '--', `--user-data-dir=${profilePath(sessionId)}`])
+        .then(r => r.stdout.trim().split('\n').map(l => l.replace(/ --.*/, '').slice(0, 120)).join(' | '), () => '?');
+    console.warn(`[browser-manager] ${sessionId} close TIMED OUT after ${Date.now() - t0}ms — killing Chromium; still running: ${survivors}`);
     // `--` so pkill doesn't read the pattern as its own option.
     await execFile('pkill', ['-9', '-f', '--', `--user-data-dir=${profilePath(sessionId)}`]).catch(() => {});
     await sleep(500);
