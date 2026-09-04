@@ -305,13 +305,15 @@ export async function deleteAllForUser(userId: string): Promise<number> {
  *  restart/redeploy and comes back via restore. Sessions with open CDP
  *  connections are parked too — the client reconnects after the restart. */
 export async function closeAllSessions(): Promise<void> {
-    await Promise.all([...sessions].map(async ([id, s]) => {
+    const live = [...sessions];
+    sessions.clear();  // before closing: the 'disconnected' handler must not re-park with about:blank
+    await Promise.all(live.map(async ([id, s]) => {
         const pages = s.context.pages();
         const page  = pages.find(p => !p.url().startsWith('about:')) ?? pages[0];
-        await persistHibernated(snapshot(id, s, page?.url() ?? 'about:blank')).catch(() => {});
+        try { await persistHibernated(snapshot(id, s, page?.url() ?? 'about:blank')); }
+        catch (e) { console.error(`[browser-manager] shutdown: could not park ${id} (profile kept on disk):`, e); }
         await closeBrowser(s, id);
     }));
-    sessions.clear();
 }
 
 // ── Hibernate / Restore ───────────────────────────────────────────────────────
