@@ -359,7 +359,11 @@ const CLOSE_TIMEOUT_MS = 5_000;  // a clean close takes ~200ms; Playwright somet
 /** Graceful close; if Chromium doesn't exit in time, kill it so the profile
  *  lock is released and the next restore can launch. */
 async function closeBrowser(s: BrowserSession, sessionId: string): Promise<void> {
-    const graceful = s.context.close().catch(() => {}).then(() => s.browser.close().catch(() => {}));
+    // Playwright resolves before the Chromium process has fully exited; a restore
+    // launched in that window trips Chrome's profile singleton (the new process
+    // hands off to the dying one and quits). So wait for the process itself.
+    const graceful = s.context.close().catch(() => {}).then(() => s.browser.close().catch(() => {}))
+        .then(async () => { while (await chromiumAlive(sessionId)) await new Promise(r => setTimeout(r, 100)); });
     const timeout  = new Promise<'timeout'>(r => setTimeout(() => r('timeout'), CLOSE_TIMEOUT_MS).unref());
     if (await Promise.race([graceful, timeout]) === 'timeout') {
         console.warn(`[browser-manager] ${sessionId} close timed out — killing Chromium`);
