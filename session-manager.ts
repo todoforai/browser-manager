@@ -363,10 +363,10 @@ async function closeBrowser(s: BrowserSession, sessionId: string): Promise<void>
     //  - Playwright resolves before the process has fully exited; a restore
     //    launched in that window trips Chrome's profile singleton (the new
     //    process hands off to the dying one and quits).
-    //  - Under Bun the child's `exit` event is sometimes never delivered (the
-    //    process sits as a zombie), so `context.close()` would hang forever
-    //    even though Chromium is gone. pgrep doesn't match zombies, so
-    //    chromiumAlive() still reports the truth.
+    //  - If the runtime drops the child's `close` event (Bun did; the process
+    //    sits as a zombie), `context.close()` hangs forever even though
+    //    Chromium is gone. pgrep doesn't match zombies, so chromiumAlive()
+    //    still reports the truth.
     const sleep    = (ms: number) => new Promise(r => setTimeout(r, ms));
     const closing  = s.context.close().catch(() => {}).then(() => s.browser.close().catch(() => {}));
     const exited   = (async () => { while (await chromiumAlive(sessionId)) await sleep(100); })();

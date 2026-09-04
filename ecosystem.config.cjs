@@ -52,13 +52,16 @@ const envFromDisk = {
 };
 
 // REST app — Chromium-on-demand. Binds REST + admin + CDP + Noise sockets.
+// Prod runs on Node (via tsx): under Bun, Playwright's spawned Chromium
+// intermittently never gets its `close` event (child left as a zombie), so
+// context.close() hangs and every ~3rd hibernate needs a 20s SIGKILL.
 // Dev uses bun --watch (single PID PM2 can signal cleanly — a watcher that
 // forks a child PM2 can't track would wedge the process on restart).
 const restApp = {
   name: `browser-manager-${port}`,
   script: 'server.ts',
-  interpreter: BUN,
-  interpreter_args: isProd ? undefined : '--watch',
+  interpreter: isProd ? 'node' : BUN,
+  interpreter_args: isProd ? '--import tsx' : '--watch',
   cwd: __dirname,
   instances: 1,
   exec_mode: 'fork',
