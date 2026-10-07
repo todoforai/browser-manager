@@ -115,8 +115,9 @@ Cloudflare gives datacenter IPs (Hetzner) a hard challenge no fingerprint patch 
 the same CloakBrowser on a residential IP passes. A PC with a home connection runs
 `scripts/residential-proxy.ts` (SOCKS5, public internet only — LAN/localhost refused) and an
 `ssh -R 127.0.0.1:1080:127.0.0.1:1080 root@browser.todofor.ai` tunnel; prod sets
-`DEFAULT_PROXY=socks5://127.0.0.1:1080`. Sessions without their own proxy use it while the
-tunnel is up, and launch direct when it's down.
+`DEFAULT_PROXY=socks5://127.0.0.1:1080` plus `DEFAULT_PROXY_USERS=<userId,...>` (only those users
+egress through the home IP; everyone else launches direct). Their sessions without their own
+proxy use it while the tunnel is up, and launch direct when it's down.
 
 Headed sessions (`--headed`) get a shared Xvfb started on demand when `DISPLAY` is unset.
 

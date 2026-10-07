@@ -38,6 +38,9 @@ const CLOAK_LICENSE_KEY = process.env.CLOAKBROWSER_LICENSE_KEY?.trim() || undefi
 // Used only while a real CONNECT through it succeeds, so a dead tunnel (or a live
 // ssh listener with the home side down) falls back to direct instead of failing launches.
 const DEFAULT_PROXY = process.env.DEFAULT_PROXY?.trim() || undefined;
+// Only these userIds (comma-separated) get DEFAULT_PROXY — it's someone's home IP,
+// so other users must never egress through it. Empty → nobody.
+const DEFAULT_PROXY_USERS = new Set((process.env.DEFAULT_PROXY_USERS ?? '').split(',').map(s => s.trim()).filter(Boolean));
 
 /** SOCKS5 CONNECT to 1.1.1.1:443 through `server`; true iff the proxy answers success. */
 function socksHealthy(server: string): Promise<boolean> {
@@ -232,7 +235,7 @@ export async function createSession(sessionId: string, opts: { userId: string; v
     const viewport  = opts.viewport ?? { width: 1280, height: 720 };
     const stealth   = opts.stealth;
     // Not persisted into the session's stealth: a restore re-checks the tunnel.
-    const viaDefault = !stealth?.proxy && await defaultProxyHealthy();
+    const viaDefault = !stealth?.proxy && DEFAULT_PROXY_USERS.has(opts.userId) && await defaultProxyHealthy();
     const proxy     = viaDefault ? { server: DEFAULT_PROXY! } : stealth?.proxy;
     // geoip still sets the timezone; keep pages in English instead of the exit country's language.
     const locale    = stealth?.locale ?? (viaDefault ? 'en-US' : undefined);
