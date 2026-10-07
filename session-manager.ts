@@ -12,8 +12,8 @@
 // hibernation (a cold incognito browser is the biggest bot tell). We still pass
 // --remote-debugging-port so the CDP relay (cdp-proxy.ts) is unchanged.
 import { launchPersistentContext } from 'cloakbrowser';
-import { createServer as createNetServer } from 'net';
-import { execFile as execFileCb } from 'child_process';
+import { createServer as createNetServer, connect as netConnect } from 'net';
+import { execFile as execFileCb, spawn } from 'child_process';
 import { promisify } from 'util';
 import fs from 'fs/promises';
 import path from 'path';
@@ -31,6 +31,64 @@ const CHROMIUM_ARGS = [
 
 // Optional Pro tier: newest binary + anti-bot patches. Empty → free v146.
 const CLOAK_LICENSE_KEY = process.env.CLOAKBROWSER_LICENSE_KEY?.trim() || undefined;
+
+// SOCKS5 proxy for sessions that don't bring their own: an `ssh -R` tunnel to a
+// residential machine running scripts/residential-proxy.ts. Cloudflare challenged
+// our Hetzner exit on every test site; the same browser on a home IP passed.
+// Used only while a real CONNECT through it succeeds, so a dead tunnel (or a live
+// ssh listener with the home side down) falls back to direct instead of failing launches.
+const DEFAULT_PROXY = process.env.DEFAULT_PROXY?.trim() || undefined;
+
+/** SOCKS5 CONNECT to 1.1.1.1:443 through `server`; true iff the proxy answers success. */
+function socksHealthy(server: string): Promise<boolean> {
+    const { hostname, port } = new URL(server);
+    return new Promise(resolve => {
+        const sock = netConnect({ host: hostname, port: Number(port) });
+        const done = (ok: boolean) => { sock.destroy(); resolve(ok); };
+        sock.setTimeout(3000, () => done(false)).once('error', () => done(false)).once('close', () => done(false));
+        sock.once('connect', () => sock.write(Buffer.from([5, 1, 0])));
+        let buf = Buffer.alloc(0), greeted = false;
+        sock.on('data', d => {
+            buf = Buffer.concat([buf, d]);
+            if (!greeted && buf.length >= 2) {
+                if (buf[1] !== 0) return done(false);
+                greeted = true; buf = buf.subarray(2);
+                sock.write(Buffer.from([5, 1, 0, 1, 1, 1, 1, 1, 443 >> 8, 443 & 255]));
+            }
+            if (greeted && buf.length >= 2) done(buf[1] === 0);
+        });
+    });
+}
+
+let proxyCheck: { at: number; ok: Promise<boolean> } | undefined;
+function defaultProxyHealthy(): Promise<boolean> {
+    if (!DEFAULT_PROXY) return Promise.resolve(false);
+    if (!proxyCheck || Date.now() - proxyCheck.at > 30_000)
+        proxyCheck = { at: Date.now(), ok: socksHealthy(DEFAULT_PROXY) };
+    return proxyCheck.ok;
+}
+
+// Headed sessions need an X server; servers have none. Start one shared Xvfb on
+// first headed launch (-displayfd picks a free display, so blue/green slots
+// don't collide). Hosts with a real DISPLAY use it as-is.
+let xvfb: ReturnType<typeof spawn> | undefined;
+let xvfbDisplay: Promise<string> | undefined;
+process.once('exit', () => xvfb?.kill());
+function ensureDisplay(): Promise<string> {
+    if (process.env.DISPLAY) return Promise.resolve(process.env.DISPLAY);
+    return xvfbDisplay ??= new Promise<string>((resolve, reject) => {
+        const proc = xvfb = spawn('Xvfb', ['-displayfd', '1', '-screen', '0', '1920x1080x24', '-nolisten', 'tcp'], { stdio: ['ignore', 'pipe', 'inherit'] });
+        const fail = (e: Error) => { xvfb = xvfbDisplay = undefined; proc.kill(); reject(e); };
+        const timer = setTimeout(() => fail(new Error('Xvfb start timed out')), 10_000);
+        let out = '';
+        proc.stdout!.on('data', d => {
+            out += d;
+            if (out.includes('\n')) { clearTimeout(timer); resolve(`:${out.trim()}`); }
+        });
+        proc.once('error', e => { clearTimeout(timer); fail(e); });
+        proc.once('exit', code => { clearTimeout(timer); if (xvfb === proc) fail(new Error(`Xvfb exited (${code})`)); });
+    });
+}
 
 const IDLE_TIMEOUT_MS      = 5  * 60 * 1000;  // active → idle after 5 min with 0 connections
 const HIBERNATE_TIMEOUT_MS = 30 * 60 * 1000;  // idle → hibernated after 30 min
@@ -173,10 +231,16 @@ export async function createSession(sessionId: string, opts: { userId: string; v
 
     const viewport  = opts.viewport ?? { width: 1280, height: 720 };
     const stealth   = opts.stealth;
+    // Not persisted into the session's stealth: a restore re-checks the tunnel.
+    const viaDefault = !stealth?.proxy && await defaultProxyHealthy();
+    const proxy     = viaDefault ? { server: DEFAULT_PROXY! } : stealth?.proxy;
+    // geoip still sets the timezone; keep pages in English instead of the exit country's language.
+    const locale    = stealth?.locale ?? (viaDefault ? 'en-US' : undefined);
     const debugPort = await freePort();
     // headless defaults on; a per-session override (headless:false) forces headed
     // for login-gated / hard sites. Env HEADLESS=false flips the global default.
     const headless  = stealth?.headless ?? (process.env.HEADLESS !== 'false');
+    const display   = headless ? undefined : await ensureDisplay();
 
     // Profile dir: created on first launch, reused on restore. profileIsNew lets a
     // failed create clean up after itself without wiping a warm profile a restore
@@ -198,15 +262,16 @@ export async function createSession(sessionId: string, opts: { userId: string; v
             userDataDir,
             headless,
             licenseKey: CLOAK_LICENSE_KEY,
-            proxy: stealth?.proxy,
-            locale: stealth?.locale,
+            proxy,
+            locale,
             timezone: stealth?.timezone,
-            geoip: !!(stealth?.proxy && (!stealth.timezone || !stealth.locale)),
+            // With tz+locale pinned (restores) geoip still resolves the exit IP for WebRTC.
+            geoip: !!proxy,
             humanize: stealth?.humanize ?? true,
             args: [...CHROMIUM_ARGS, `--remote-debugging-port=${debugPort}`],
             // A healthy launch is ~1–3s. Playwright's default (180s) turns a rare
             // wedged launch into a 3-minute outage for every coalesced restore.
-            launchOptions: { timeout: LAUNCH_TIMEOUT_MS },
+            launchOptions: { timeout: LAUNCH_TIMEOUT_MS, ...(display && { env: { ...process.env, DISPLAY: display } }) },
         });
     } catch (e) {
         console.error(`[browser-manager] ${sessionId} launch failed after ${Date.now() - launchedAt}ms: ${e instanceof Error ? e.message.split('\n')[0] : e}`);

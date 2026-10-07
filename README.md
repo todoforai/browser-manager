@@ -109,6 +109,17 @@ npm run install-browsers
 npm run dev
 ```
 
+## Anti-bot / residential egress
+
+Cloudflare gives datacenter IPs (Hetzner) a hard challenge no fingerprint patch passes;
+the same CloakBrowser on a residential IP passes. A PC with a home connection runs
+`scripts/residential-proxy.ts` (SOCKS5, public internet only — LAN/localhost refused) and an
+`ssh -R 127.0.0.1:1080:127.0.0.1:1080 root@browser.todofor.ai` tunnel; prod sets
+`DEFAULT_PROXY=socks5://127.0.0.1:1080`. Sessions without their own proxy use it while the
+tunnel is up, and launch direct when it's down.
+
+Headed sessions (`--headed`) get a shared Xvfb started on demand when `DISPLAY` is unset.
+
 ## Pricing
 
 **Cost basis:** 1× VM at $150/mo = 16 cores / 128 GB RAM / 2 TB SSD.
